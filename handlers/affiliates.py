@@ -101,7 +101,7 @@ async def show_affiliates(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
 
     link_convite = f"https://t.me/{bot_username}?start={user_id}"
-    safe_link = escape_markdown(link_convite, version=2)
+    safe_link = link_convite
 
     texto = (
         "🤝 **PROGRAMA DE AFILIADOS LIKESPLUS**\n\n"
