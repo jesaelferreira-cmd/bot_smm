@@ -1,0 +1,58 @@
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from providers.smm_api import get_all_services, get_categories
+
+SELECTING_SERVICE = 1
+ASKING_LINK = 2
+CONFIRMING = 3
+
+async def list_services(update, context):
+    pass
+
+async def receive_service(update, context):
+    pass
+
+async def receive_link(update, context):
+    pass
+
+async def cancel(update, context):
+    pass
+
+async def services_menu(update, context):
+
+    data = get_all_services()
+
+    services = data["provider1"]  # usar fornecedor 1
+
+    categories = get_categories(services)
+
+    keyboard = []
+
+    for c in categories:
+        keyboard.append([
+            InlineKeyboardButton(c, callback_data=f"cat_{c}")
+        ])
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(
+        "Escolha uma categoria:",
+        reply_markup=reply_markup
+    )
+
+async def category_services(update, context):
+
+    query = update.callback_query
+    await query.answer()
+
+    category = query.data.replace("cat_", "")
+
+    data = get_all_services()
+    services = data["provider1"]
+
+    text = f"Serviços de {category}:\n\n"
+
+    for s in services:
+        if s["category"] == category:
+            text += f"{s['name']} - ${s['rate']}\n"
+
+    await query.edit_message_text(text)
