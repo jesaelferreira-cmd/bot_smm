@@ -6,6 +6,7 @@ from config import DB_PATH
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, ConversationHandler
 from handlers.orders import confirm_order  # Importação explícita
+from utils.helpers import safe_edit
 
 logger = logging.getLogger(__name__)
 

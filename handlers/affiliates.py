@@ -10,6 +10,7 @@ from telegram.ext import ContextTypes, ConversationHandler, CallbackQueryHandler
 from telegram.helpers import escape_markdown
 from collections import defaultdict
 from datetime import date
+from utils.helpers import safe_edit
 
 logger = logging.getLogger(__name__)
 user_daily_pix = defaultdict(int)
