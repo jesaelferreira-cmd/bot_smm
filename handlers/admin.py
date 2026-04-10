@@ -384,3 +384,39 @@ async def test_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += f"• ID `{s[0]}` – {s[1]} (R$ {s[2]:.2f}) – *{s[3]}*\n"
 
     await update.message.reply_text(msg, parse_mode="Markdown")
+
+async def debug_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    # 1. Total de serviços
+    cursor.execute("SELECT COUNT(*) FROM services")
+    total = cursor.fetchone()[0]
+
+    # 2. Amostra de categorias (diretamente do banco, sem filtros)
+    cursor.execute("SELECT DISTINCT category FROM services WHERE rate > 0 LIMIT 10")
+    raw_cats = [row[0] for row in cursor.fetchall()]
+
+    # 3. Amostra de serviços (primeiros 5)
+    cursor.execute("SELECT service_id, name, category FROM services LIMIT 5")
+    sample_services = cursor.fetchall()
+
+    # 4. O que get_categories() retorna (após filtros e normalização)
+    from handlers.services import get_categories
+    final_cats = get_categories()
+
+    conn.close()
+
+    msg = (
+        f"📊 **Total de serviços:** {total}\n\n"
+        f"📂 **Categorias cruas (banco, primeiras 10):**\n"
+        + "\n".join(f"• `{cat}`" for cat in raw_cats) + "\n\n"
+        f"🎯 **Categorias processadas (get_categories):**\n"
+        + "\n".join(f"• `{cat}`" for cat in final_cats[:10]) + "\n\n"
+        f"🛒 **Amostra de serviços (ID, nome, categoria):**\n"
+        + "\n".join(f"• `{s[0]}` – {s[1][:40]} – *{s[2]}*" for s in sample_services)
+    )
+    await update.message.reply_text(msg, parse_mode="Markdown")
