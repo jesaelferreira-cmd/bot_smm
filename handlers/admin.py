@@ -306,3 +306,47 @@ async def migrate_balance_column(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text(f"❌ Erro: {e}")
     finally:
         conn.close()
+
+async def sync_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando para sincronizar serviços do fornecedor (apenas admin)"""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Apenas o administrador pode usar este comando.")
+        return
+    
+    await update.message.reply_text("⏳ Sincronizando serviços com o fornecedor...")
+    
+    try:
+        import subprocess
+        import sys
+        import os
+        
+        # Caminho para o update_db.py
+        script_path = os.path.join(os.path.dirname(__file__), '..', 'update_db.py')
+        
+        # Executa o script
+        result = subprocess.run(
+            [sys.executable, script_path],
+            capture_output=True,
+            text=True,
+            timeout=120
+        )
+        
+        if result.returncode == 0:
+            # Conta quantos serviços foram inseridos
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM services")
+            count = cursor.fetchone()[0]
+            conn.close()
+            
+            await update.message.reply_text(
+                f"✅ **Sincronização concluída!**\n\n"
+                f"📊 Total de serviços no banco: `{count}`\n"
+                f"📡 Fornecedor: API atualizada\n\n"
+                f"Use `/comprar` para ver os novos serviços."
+            )
+        else:
+            await update.message.reply_text(f"❌ Erro na sincronização:\n```\n{result.stderr[:500]}\n```")
+            
+    except Exception as e:
+        await update.message.reply_text(f"❌ Erro ao executar: `{str(e)}`")

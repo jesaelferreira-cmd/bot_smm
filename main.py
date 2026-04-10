@@ -101,7 +101,7 @@ def main():
         app.add_handler(CommandHandler("setbalance", admin.set_balance))
         app.add_handler(CommandHandler("pedidos", status.my_orders))
         app.add_handler(CommandHandler("pix", balance.pix_command))
-
+        app.add_handler(CommandHandler("sync", admin.sync_services))
         
 # No arquivo main.py
 # ... dentro da def main():
