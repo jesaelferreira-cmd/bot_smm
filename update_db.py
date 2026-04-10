@@ -4,8 +4,7 @@
 Script robusto de atualização do banco de dados do LikesPlus.
 - Migra a tabela users para centavos
 - Atualiza a tabela services a partir das APIs dos fornecedores
-- Cria tabelas automaticamente se não existirem
-- Suporta diferentes formatos de resposta das APIs
+- Captura descrições de forma inteligente
 """
 
 import sqlite3
@@ -16,10 +15,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 from typing import List, Dict, Any, Optional
 
-# Carregar variáveis do .env
 load_dotenv()
 
-# Caminhos
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "database" / "bot_smm.db"
 
@@ -47,7 +44,6 @@ def print_info(msg: str):
 # 1. CRIAÇÃO/VERIFICAÇÃO DA TABELA SERVICES
 # ------------------------------------------------------------
 def ensure_services_table(cursor):
-    """Cria a tabela services se ela não existir, com a estrutura correta."""
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS services (
             service_id INTEGER NOT NULL,
@@ -61,7 +57,6 @@ def ensure_services_table(cursor):
             PRIMARY KEY (service_id, provider)
         )
     """)
-    # Verificar se a coluna 'description' existe (para versões antigas)
     cursor.execute("PRAGMA table_info(services)")
     columns = [col[1] for col in cursor.fetchall()]
     if 'description' not in columns:
@@ -69,27 +64,21 @@ def ensure_services_table(cursor):
         cursor.execute("ALTER TABLE services ADD COLUMN description TEXT")
 
 # ------------------------------------------------------------
-# 2. FUNÇÕES DE MIGRAÇÃO DA TABELA USERS (centavos)
+# 2. MIGRAÇÃO DA TABELA USERS (centavos)
 # ------------------------------------------------------------
 def migrate_users_table(cursor):
-    """Adiciona colunas de centavos e migra dados existentes na tabela users"""
     print_section("MIGRAÇÃO DA TABELA USERS")
     print_info("Verificando estrutura da tabela users...")
-
-    # Obter colunas existentes
     cursor.execute("PRAGMA table_info(users)")
     columns = [col[1] for col in cursor.fetchall()]
 
-    # Adicionar colunas se não existirem
     if 'affiliate_balance_cents' not in columns:
         print_info("➕ Adicionando coluna affiliate_balance_cents...")
         cursor.execute("ALTER TABLE users ADD COLUMN affiliate_balance_cents INTEGER DEFAULT 0")
-
     if 'main_balance_cents' not in columns:
         print_info("➕ Adicionando coluna main_balance_cents...")
         cursor.execute("ALTER TABLE users ADD COLUMN main_balance_cents INTEGER DEFAULT 0")
 
-    # Migrar dados das colunas antigas (FLOAT) se existirem
     if 'affiliate_balance' in columns:
         print_info("🔄 Migrando affiliate_balance (FLOAT) para affiliate_balance_cents...")
         cursor.execute("""
@@ -97,7 +86,6 @@ def migrate_users_table(cursor):
             SET affiliate_balance_cents = CAST(ROUND(COALESCE(affiliate_balance, 0) * 100) AS INTEGER)
             WHERE affiliate_balance IS NOT NULL
         """)
-
     if 'balance' in columns:
         print_info("🔄 Migrando balance (FLOAT) para main_balance_cents...")
         cursor.execute("""
@@ -106,22 +94,18 @@ def migrate_users_table(cursor):
             WHERE balance IS NOT NULL
         """)
 
-    # Corrigir possíveis NULLs
     cursor.execute("UPDATE users SET affiliate_balance_cents = 0 WHERE affiliate_balance_cents IS NULL")
     cursor.execute("UPDATE users SET main_balance_cents = 0 WHERE main_balance_cents IS NULL")
-
     print_success("Tabela users migrada com sucesso!")
 
 # ------------------------------------------------------------
-# 3. FUNÇÕES DE ATUALIZAÇÃO DE SERVIÇOS (ROBUSTA)
+# 3. FUNÇÕES DE BUSCA E EXTRAÇÃO
 # ------------------------------------------------------------
 def fetch_services(url: str, key: str, provider_id: int) -> List[Dict[str, Any]]:
-    """Busca serviços da API do fornecedor com tratamento de erros."""
     print_info(f"Buscando serviços do Fornecedor {provider_id}...")
     if not url or not key:
-        print_warning(f"Fornecedor {provider_id} sem URL ou KEY configurados. Pulando.")
+        print_warning(f"Fornecedor {provider_id} sem URL ou KEY. Pulando.")
         return []
-
     try:
         response = requests.post(url, data={'key': key, 'action': 'services'}, timeout=30)
         if response.status_code == 200:
@@ -130,49 +114,53 @@ def fetch_services(url: str, key: str, provider_id: int) -> List[Dict[str, Any]]
                 print_success(f"Fornecedor {provider_id}: {len(data)} serviços recebidos.")
                 return data
             else:
-                print_warning(f"Fornecedor {provider_id}: resposta não é uma lista (tipo: {type(data)}).")
+                print_warning(f"Resposta não é uma lista (tipo: {type(data)}).")
                 return []
         else:
-            print_error(f"Fornecedor {provider_id}: HTTP {response.status_code}")
+            print_error(f"HTTP {response.status_code}")
             return []
-    except requests.exceptions.Timeout:
-        print_error(f"Fornecedor {provider_id}: timeout (30s).")
-        return []
     except Exception as e:
-        print_error(f"Fornecedor {provider_id}: erro - {e}")
+        print_error(f"Erro: {e}")
         return []
 
 def extract_field(service: Dict, field_names: List[str], default=None):
-    """Extrai um campo do dicionário, tentando várias chaves alternativas."""
     for name in field_names:
         if name in service and service[name] is not None:
             return service[name]
     return default
 
-def update_services(cursor):
-    """Atualiza a tabela services com dados das APIs, usando fallback para diferentes formatos."""
-    print_section("ATUALIZAÇÃO DA TABELA SERVICES")
+def extract_description(service: Dict) -> str:
+    """Tenta extrair descrição de múltiplos campos possíveis."""
+    desc = extract_field(service, ['description', 'desc', 'Description', 'Desc', 'details', 'note', 'observacao', 'Observacao'])
+    if desc:
+        return str(desc).strip()
+    # Se não achou, tenta concatenar campos que podem conter informações úteis
+    extra = extract_field(service, ['comments', 'notes', 'info'])
+    if extra:
+        return f"Informações adicionais: {extra}"
+    return ""
 
-    # Garantir que a tabela services existe
+# ------------------------------------------------------------
+# 4. ATUALIZAÇÃO DE SERVIÇOS
+# ------------------------------------------------------------
+def update_services(cursor):
+    print_section("ATUALIZAÇÃO DA TABELA SERVICES")
     ensure_services_table(cursor)
 
-    # Buscar margem e promo do banco (com fallback)
+    # Buscar margem e promo
     cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value REAL)")
     cursor.execute("SELECT value FROM settings WHERE key = 'margem'")
     row_margem = cursor.fetchone()
-    margem_atual = float(row_margem[0]) if row_margem else 1.0
-
+    margem = float(row_margem[0]) if row_margem else 1.0
     cursor.execute("SELECT value FROM settings WHERE key = 'promo'")
     row_promo = cursor.fetchone()
-    promo_atual = float(row_promo[0]) if row_promo else 0.0
+    promo = float(row_promo[0]) if row_promo else 0.0
+    print_info(f"Margem: {margem}x | Promo: {promo*100}%")
 
-    print_info(f"Margem: {margem_atual}x | Promoção: {promo_atual*100}%")
-
-    # Limpa a tabela (opcional – se quiser manter histórico, comente esta linha)
+    # Limpa tabela
     cursor.execute("DELETE FROM services")
-    print_info("Tabela services limpa (modo substituição total).")
+    print_info("Tabela services limpa.")
 
-    # Lista de fornecedores (adicione quantos quiser)
     fornecedores = [
         (1, os.getenv("SMM_API_URL_1"), os.getenv("SMM_API_KEY_1")),
         (2, os.getenv("SMM_API_URL_2"), os.getenv("SMM_API_KEY_2")),
@@ -180,113 +168,87 @@ def update_services(cursor):
 
     total_inserido = 0
     categorias = {}
-    erros = []
+    desc_count = 0
 
-    for provider_id, url, key in fornecedores:
+    for prov_id, url, key in fornecedores:
         if not url or not key:
-            print_warning(f"Fornecedor {provider_id} ignorado (variáveis ausentes).")
             continue
-
-        servicos = fetch_services(url, key, provider_id)
+        servicos = fetch_services(url, key, prov_id)
         if not servicos:
             continue
 
-        for idx, s in enumerate(servicos):
+        for s in servicos:
             try:
-                # Extrai campos com fallback
                 service_id = extract_field(s, ['service', 'id', 'service_id'])
                 name = extract_field(s, ['name', 'service_name', 'title'])
                 rate_str = extract_field(s, ['rate', 'price', 'preco', 'rate_per_1000'])
                 min_qty = extract_field(s, ['min', 'min_amount', 'min_quantity', 'min_order'], 0)
                 max_qty = extract_field(s, ['max', 'max_amount', 'max_quantity', 'max_order'], 999999)
                 category = extract_field(s, ['category', 'categoria', 'cat', 'type'], 'Outros')
-                description = extract_field(s, ['description', 'desc', 'details'], '')
+                description = extract_description(s)
 
-                # Validações
-                if service_id is None:
-                    erros.append(f"Prov{provider_id} serviço #{idx}: sem ID – ignorado")
-                    continue
-                if not name:
-                    erros.append(f"Prov{provider_id} ID {service_id}: sem nome – ignorado")
+                if not service_id or not name:
                     continue
                 try:
                     preco_base = float(rate_str) if rate_str is not None else 0.0
-                except (ValueError, TypeError):
-                    erros.append(f"Prov{provider_id} ID {service_id}: rate inválido ('{rate_str}') – ignorado")
+                except:
                     continue
-
                 if preco_base <= 0:
-                    # Não insere serviço com preço zero ou negativo
                     continue
 
-                # Calcula preço de venda
-                preco_venda = round((preco_base * margem_atual) * (1 - promo_atual), 2)
-
-                # Converte min/max para inteiro
+                preco_venda = round((preco_base * margem) * (1 - promo), 2)
                 try:
                     min_qty = int(min_qty) if min_qty is not None else 0
                     max_qty = int(max_qty) if max_qty is not None else 999999
-                except (ValueError, TypeError):
-                    min_qty = 0
-                    max_qty = 999999
+                except:
+                    min_qty, max_qty = 0, 999999
 
-                # Insere no banco
+                if not description:
+                    description = "Sem descrição disponível."
+                else:
+                    desc_count += 1
+
                 cursor.execute("""
                     INSERT OR REPLACE INTO services
                     (service_id, name, rate, min, max, category, provider, description)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (service_id, name, preco_venda, min_qty, max_qty, category, provider_id, description))
+                """, (service_id, name, preco_venda, min_qty, max_qty, category, prov_id, description))
 
                 total_inserido += 1
                 categorias[category] = categorias.get(category, 0) + 1
 
             except Exception as e:
-                erros.append(f"Prov{provider_id} ID {s.get('service', s.get('id', '?'))}: {e}")
+                print_warning(f"Erro no serviço {s.get('service', s.get('id', '?'))}: {e}")
                 continue
 
-    # Relatório final
     print_section("RESUMO DA ATUALIZAÇÃO")
     print_success(f"Total de serviços inseridos/atualizados: {total_inserido}")
-
+    print_info(f"Serviços com descrição: {desc_count} (de {total_inserido})")
     if categorias:
         print_info("Categorias encontradas:")
-        for cat, qtd in sorted(categorias.items(), key=lambda x: x[1], reverse=True):
+        for cat, qtd in sorted(categorias.items(), key=lambda x: x[1], reverse=True)[:15]:
             print(f"   • {cat}: {qtd} serviços")
     else:
-        print_warning("Nenhuma categoria foi processada. Verifique a conexão com os fornecedores.")
-
-    if erros:
-        print_warning(f"Ocorreram {len(erros)} erros durante o processamento (últimos 10):")
-        for err in erros[-10:]:
-            print(f"   ⚠️ {err}")
+        print_warning("Nenhuma categoria processada. Verifique os fornecedores.")
 
 # ------------------------------------------------------------
-# 4. MAIN
+# 5. MAIN
 # ------------------------------------------------------------
 def main():
-    print_section("LIKESPLUS - SCRIPT DE ATUALIZAÇÃO DO BANCO DE DADOS")
+    print_section("LIKESPLUS - SCRIPT DE ATUALIZAÇÃO")
     if not os.path.exists(DB_PATH):
-        print_error(f"Banco de dados não encontrado em: {DB_PATH}")
-        print_info("Certifique-se de que o caminho está correto e o arquivo existe.")
+        print_error(f"Banco não encontrado em {DB_PATH}")
         return
-
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-
     try:
-        # Passo 1: Migrar tabela users (centavos)
         migrate_users_table(cursor)
-
-        # Passo 2: Atualizar serviços
         update_services(cursor)
-
-        # Commit final
         conn.commit()
-        print_section("FIM DO PROCESSO")
+        print_section("FIM")
         print_success("Atualização concluída com sucesso!")
-
     except Exception as e:
-        print_error(f"Erro fatal durante a atualização: {e}")
+        print_error(f"Erro fatal: {e}")
         conn.rollback()
         sys.exit(1)
     finally:
