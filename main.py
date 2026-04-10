@@ -70,7 +70,7 @@ def main():
                     MessageHandler(filters.TEXT & ~filters.COMMAND, services.receive_quantity)
                 ],
                 services.WAIT_CONFIRM_PRICE: [
-                    CallbackQueryHandler(services.confirm_price_callback, pattern="^confirm_price$"),
+                    CallbackQueryHandler(services.proceed_to_quantity, pattern="^proceed_quantity$"),
                     CallbackQueryHandler(services.list_services, pattern="^back_to_categories$")
                 ],
                 services.ASKING_LINK: [
@@ -109,7 +109,6 @@ def main():
         app.add_handler(CommandHandler("bc", admin.broadcast))
         app.add_handler(CommandHandler("setbalance", admin.set_balance))
         app.add_handler(CommandHandler("test_services", admin.test_services))
-        app.add_handler(CommandHandler("debug_services", admin.debug_services))
 
         # Callbacks Gerais (Menu Principal e Perfil)
         app.add_handler(CallbackQueryHandler(user.show_profile, pattern="^my_profile$"))

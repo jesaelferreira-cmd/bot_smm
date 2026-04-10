@@ -233,29 +233,50 @@ async def receive_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit(query, "❌ Serviço não encontrado.", None)
         return SELECTING_SERVICE
 
+    # Armazena dados do serviço
     context.user_data["service_id"] = service[0]
     context.user_data["service_name"] = service[1]
     context.user_data["rate"] = float(service[2])
     context.user_data["min"] = int(service[3])
     context.user_data["max"] = int(service[4])
+    context.user_data["description"] = service[7] if len(service) > 7 else ""
+
+    desc_text = context.user_data["description"]
+    if not desc_text or desc_text.strip() == "":
+        desc_text = "Sem descrição disponível."
 
     text = (
         f"📦 **{service[1]}**\n\n"
         f"💰 Preço por 1000: **R$ {service[2]:.2f}**\n"
-        f"📉 Mínimo: `{service[3]}` | 📈 Máximo: `{service[4]}`\n\n"
+        f"📉 Mínimo: `{service[3]}` | 📈 Máximo: `{service[4]}`\n"
+        f"📝 **Descrição:** {desc_text}\n\n"
+        f"❓ Deseja comprar este serviço?"
+    )
+
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Sim, escolher quantidade", callback_data="proceed_quantity"),
+            InlineKeyboardButton("⬅️ Voltar", callback_data="back_to_categories")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    # Salva a categoria original para possível volta
+    category_raw = service[5] if len(service) > 5 else "back"
+    context.user_data["service_category"] = category_raw
+
+    await safe_edit(query, text, reply_markup)
+    return WAIT_CONFIRM_PRICE
+
+async def proceed_to_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    text = (
+        f"📦 **{context.user_data['service_name']}**\n\n"
         f"❓ **Quanto deseja comprar?**\n"
         f"_(Digite apenas o número, ex: 500)_"
     )
-    category_raw = service[5] if len(service) > 5 else "back"
-    back_hash = _get_cat_hash(category_raw)
-    back_callback = f"cat_{back_hash}"
-    if 'cat_hash_map' not in context.bot_data:
-        context.bot_data['cat_hash_map'] = {}
-    context.bot_data['cat_hash_map'][back_callback] = category_raw
-    keyboard = [[InlineKeyboardButton("⬅️ Escolher outro Serviço", callback_data=back_callback)]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await safe_edit(query, text, reply_markup)
+    await query.edit_message_text(text, parse_mode="Markdown")
     return ASKING_QUANTITY
 
 async def receive_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE):
