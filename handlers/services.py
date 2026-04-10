@@ -132,22 +132,13 @@ def is_valid_category(category: str) -> bool:
 # DATABASE LAYER (ATUALIZADO COM FALLBACK)
 # =========================
 def fetch_categories_from_db() -> List[str]:
-    query_main = """
-        SELECT DISTINCT s.category
-        FROM services s
-        JOIN providers_status ps ON s.provider_id = ps.id
-        WHERE s.rate > 0 AND ps.status = 'ONLINE'
-    """
-    query_fallback = "SELECT DISTINCT category FROM services WHERE rate > 0"
+    """Busca categorias diretamente da tabela services, sem depender de providers_status."""
     try:
         with sqlite3.connect(str(DB_PATH)) as conn:
             cursor = conn.cursor()
-            try:
-                cursor.execute(query_main)
-            except sqlite3.OperationalError:
-                cursor.execute(query_fallback)
+            cursor.execute("SELECT DISTINCT category FROM services WHERE rate > 0")
             rows = cursor.fetchall()
-        return [row[0] for row in rows if row and row[0]]
+            return [row[0] for row in rows if row and row[0]]
     except Exception as e:
         logger.error(f"Erro ao buscar categorias: {e}")
         return []
