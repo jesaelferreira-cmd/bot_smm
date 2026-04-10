@@ -124,8 +124,8 @@ def is_valid_category(category: str) -> bool:
     cat_lower = category.lower().strip()
     if category.isdigit() or len(category) < 3:
         return False
-    if any(term in cat_lower for term in FORBIDDEN_TERMS):
-        return False
+    #if any(term in cat_lower for term in FORBIDDEN_TERMS):
+        #return False
     return True
 
 # =========================
