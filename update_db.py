@@ -19,6 +19,7 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "database" / "bot_smm.db"
+description = extract_description(s, name, category)
 
 # ------------------------------------------------------------
 # CONFIGURAÇÃO DE LOGS
@@ -129,16 +130,15 @@ def extract_field(service: Dict, field_names: List[str], default=None):
             return service[name]
     return default
 
-def extract_description(service: Dict) -> str:
-    """Tenta extrair descrição de múltiplos campos possíveis."""
-    desc = extract_field(service, ['description', 'desc', 'Description', 'Desc', 'details', 'note', 'observacao', 'Observacao'])
-    if desc:
-        return str(desc).strip()
-    # Se não achou, tenta concatenar campos que podem conter informações úteis
-    extra = extract_field(service, ['comments', 'notes', 'info'])
-    if extra:
-        return f"Informações adicionais: {extra}"
-    return ""
+def extract_description(service: Dict, name: str, category: str) -> str:
+    """Extrai descrição ou cria uma descrição padrão baseada no nome e categoria."""
+    desc = extract_field(service, ['description', 'desc', 'Description', 'Desc', 'details', 'note'])
+    if desc and isinstance(desc, str) and desc.strip():
+        return desc.strip()
+    
+    # Gera uma descrição padrão se a API não fornecer
+    default_desc = f"📢 Serviço: {name}\n📂 Categoria: {category}\n✅ Entrega rápida e qualidade garantida."
+    return default_desc
 
 # ------------------------------------------------------------
 # 4. ATUALIZAÇÃO DE SERVIÇOS
