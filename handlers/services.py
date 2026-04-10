@@ -276,7 +276,8 @@ async def proceed_to_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"❓ **Quanto deseja comprar?**\n"
         f"_(Digite apenas o número, ex: 500)_"
     )
-    await query.edit_message_text(text, parse_mode="Markdown")
+    # Usa safe_edit em vez de edit_message_text diretamente
+    await safe_edit(query, text, None)
     return ASKING_QUANTITY
 
 async def receive_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE):
