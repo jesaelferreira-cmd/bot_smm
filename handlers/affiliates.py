@@ -10,7 +10,6 @@ from telegram.ext import ContextTypes, ConversationHandler, CallbackQueryHandler
 from telegram.helpers import escape_markdown
 from collections import defaultdict
 from datetime import date
-from utils.helpers import safe_edit
 
 logger = logging.getLogger(__name__)
 user_daily_pix = defaultdict(int)
@@ -29,6 +28,20 @@ user_pix_locks = {}
 # =========================================================
 # FUNÇÕES AUXILIARES
 # =========================================================
+async def safe_edit(query, text: str, reply_markup=None, parse_mode="Markdown"):
+    """Edita mensagem com texto ou legenda, com fallback para nova mensagem."""
+    try:
+        await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode=parse_mode)
+        return
+    except Exception:
+        pass
+    try:
+        await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode=parse_mode)
+        return
+    except Exception:
+        pass
+    await query.message.reply_text(text=text, reply_markup=reply_markup, parse_mode=parse_mode)
+
 def cents_to_float(cents: int) -> float:
     return round(cents / 100.0, 2)
 
