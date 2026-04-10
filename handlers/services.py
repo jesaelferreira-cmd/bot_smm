@@ -144,12 +144,14 @@ def fetch_categories_from_db() -> List[str]:
         return []
 
 def get_categories() -> List[str]:
+    """Retorna categorias reais do banco (sem normalização que altera o texto)."""
     try:
         raw = fetch_categories_from_db()
-        filtered = [cat for cat in raw if is_valid_category(cat)]
-        normalized = [normalize_category(cat) for cat in filtered]
-        unique = list(dict.fromkeys(normalized))
-        return sort_categories(unique)
+        # Filtro mínimo: apenas categorias não vazias e com pelo menos 2 caracteres
+        filtered = [cat for cat in raw if cat and len(cat.strip()) >= 2]
+        # Remove duplicatas mantendo ordem
+        unique = list(dict.fromkeys(filtered))
+        return unique  # sem ordenação por emoji (opcional, mas pode manter)
     except Exception as e:
         logger.error(f"Erro no pipeline de categorias: {e}")
         return []
@@ -199,25 +201,27 @@ async def list_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ Nenhum serviço disponível. Tente mais tarde.")
         return ConversationHandler.END
 
-    # Mapeia hash -> nome da categoria (para usar no category_services)
-    if 'cat_hash_map' not in context.bot_data:
-        context.bot_data['cat_hash_map'] = {}
+    # Armazena a lista real de categorias (sem emojis)
+    context.bot_data['categories_list'] = categories
 
     keyboard = []
     for i in range(0, len(categories), 2):
         cat_name = categories[i]
-        hash1 = _get_cat_hash(cat_name)
-        callback_data1 = f"cat_{hash1}"
-        context.bot_data['cat_hash_map'][callback_data1] = cat_name
-        row = [InlineKeyboardButton(cat_name, callback_data=callback_data1)]
-
+        # Adiciona emoji apenas para exibição (opcional)
+        display_name = normalize_category(cat_name)  # apenas para o texto do botão
+        callback_data = f"cat_{cat_name[:50]}"  # usa o nome real, mas truncado (ainda pode ser longo)
+        # Mas para evitar problemas de tamanho, use hash do nome real
+        cat_hash = hashlib.md5(cat_name.encode()).hexdigest()[:8]
+        callback_data = f"cat_{cat_hash}"
+        context.bot_data['cat_hash_map'][callback_data] = cat_name
+        row = [InlineKeyboardButton(display_name, callback_data=callback_data)]
         if i + 1 < len(categories):
             cat_name2 = categories[i+1]
-            hash2 = _get_cat_hash(cat_name2)
+            display_name2 = normalize_category(cat_name2)
+            hash2 = hashlib.md5(cat_name2.encode()).hexdigest()[:8]
             callback_data2 = f"cat_{hash2}"
             context.bot_data['cat_hash_map'][callback_data2] = cat_name2
-            row.append(InlineKeyboardButton(cat_name2, callback_data=callback_data2))
-
+            row.append(InlineKeyboardButton(display_name2, callback_data=callback_data2))
         keyboard.append(row)
 
     keyboard.append([InlineKeyboardButton("🏠 Voltar ao Menu Principal", callback_data="back_to_start")])
@@ -238,15 +242,13 @@ async def category_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-    callback_data = query.data  # ex: "cat_a1b2c3d4"
     cat_hash_map = context.bot_data.get('cat_hash_map', {})
-    category_name = cat_hash_map.get(callback_data)
-
+    category_name = cat_hash_map.get(query.data)
     if not category_name:
         await safe_edit(query, "❌ Categoria inválida. Use /comprar novamente.", None)
         return SELECTING_SERVICE
 
-    services = get_services(category_name)
+    services = get_services(category_name)  # agora usa o nome real
     if not services:
         await safe_edit(query, "❌ Nenhum serviço disponível nesta categoria.", None)
         return SELECTING_SERVICE
@@ -256,10 +258,9 @@ async def category_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
         btn_text = f"{s[1]} - R$ {s[2]:.2f}"
         keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"serv_{s[0]}")])
 
-    # Botão voltar para categorias – note que usamos "back_to_categories" (sem hash, é um callback fixo)
     keyboard.append([InlineKeyboardButton("⬅️ Voltar para Categorias", callback_data="back_to_categories")])
     reply_markup = InlineKeyboardMarkup(keyboard)
-    text = f"🚀 **SERVIÇOS: {category_name.upper()}**"
+    text = f"🚀 **SERVIÇOS: {category_name}**"  # exibe o nome real
 
     await safe_edit(query, text, reply_markup)
     return SELECTING_SERVICE
