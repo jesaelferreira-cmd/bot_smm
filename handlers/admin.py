@@ -387,6 +387,7 @@ async def test_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def debug_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Apenas administrador.")
         return
 
     conn = sqlite3.connect(DB_PATH)
@@ -396,7 +397,7 @@ async def debug_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cursor.execute("SELECT COUNT(*) FROM services")
     total = cursor.fetchone()[0]
 
-    # 2. Amostra de categorias (diretamente do banco, sem filtros)
+    # 2. Categorias cruas (primeiras 10)
     cursor.execute("SELECT DISTINCT category FROM services WHERE rate > 0 LIMIT 10")
     raw_cats = [row[0] for row in cursor.fetchall()]
 
@@ -404,19 +405,24 @@ async def debug_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cursor.execute("SELECT service_id, name, category FROM services LIMIT 5")
     sample_services = cursor.fetchall()
 
-    # 4. O que get_categories() retorna (após filtros e normalização)
+    # 4. Categorias processadas pelo get_categories()
     from handlers.services import get_categories
     final_cats = get_categories()
 
     conn.close()
 
-    msg = (
-        f"📊 **Total de serviços:** {total}\n\n"
-        f"📂 **Categorias cruas (banco, primeiras 10):**\n"
-        + "\n".join(f"• `{cat}`" for cat in raw_cats) + "\n\n"
-        f"🎯 **Categorias processadas (get_categories):**\n"
-        + "\n".join(f"• `{cat}`" for cat in final_cats[:10]) + "\n\n"
-        f"🛒 **Amostra de serviços (ID, nome, categoria):**\n"
-        + "\n".join(f"• `{s[0]}` – {s[1][:40]} – *{s[2]}*" for s in sample_services)
-    )
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    # Monta mensagem sem Markdown (texto puro)
+    msg = f"=== DIAGNÓSTICO ===\n\n"
+    msg += f"Total de serviços: {total}\n\n"
+    msg += "Categorias cruas (banco, primeiras 10):\n"
+    for cat in raw_cats:
+        msg += f"- {cat}\n"
+    msg += "\nCategorias processadas (get_categories):\n"
+    for cat in final_cats[:10]:
+        msg += f"- {cat}\n"
+    msg += "\nAmostra de serviços (ID, nome, categoria):\n"
+    for s in sample_services:
+        msg += f"- {s[0]} – {s[1][:50]} – {s[2]}\n"
+
+    # Envia sem parse_mode (evita erros de formatação)
+    await update.message.reply_text(msg)
