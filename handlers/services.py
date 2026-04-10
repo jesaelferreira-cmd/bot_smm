@@ -1,12 +1,12 @@
 import logging
 import sqlite3
 import re
+import hashlib
 from typing import List
 from config import DB_PATH
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, ConversationHandler
 from handlers.orders import confirm_order  # Importação explícita
-from utils.helpers import safe_edit
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,20 @@ PRIORITY_MAP = {
 }
 
 EMOJI_REGEX = re.compile(r'^[\U00010000-\U0010ffff\u2600-\u26ff\u2700-\u27bf]')
+
+async def safe_edit(query, text: str, reply_markup=None, parse_mode="Markdown"):
+    """Edita mensagem com texto ou legenda, com fallback para nova mensagem."""
+    try:
+        await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode=parse_mode)
+        return
+    except Exception:
+        pass
+    try:
+        await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode=parse_mode)
+        return
+    except Exception:
+        pass
+    await query.message.reply_text(text=text, reply_markup=reply_markup, parse_mode=parse_mode)
 
 # =========================
 # FUNÇÕES AUXILIARES DE SEGURANÇA
@@ -171,89 +185,92 @@ def get_service_by_id(service_id):
     conn.close()
     return service
 
+def _get_cat_hash(cat_name: str) -> str:
+    """Gera um hash curto de 8 caracteres a partir do nome da categoria."""
+    return hashlib.md5(cat_name.encode()).hexdigest()[:8]
+
 # =========================
 # HANDLERS (COM VALIDAÇÕES ADICIONAIS)
 # =========================
 async def list_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    if query:
+        try:
+            await query.answer()
+        except Exception:
+            pass
+
     categories = get_categories()
     if not categories:
         if query:
-            await query.answer("Nenhuma categoria disponível no momento.")
+            await safe_edit(query, "⚠️ Nenhuma categoria disponível no momento.", None)
         else:
             await update.message.reply_text("⚠️ Nenhum serviço disponível. Tente mais tarde.")
         return ConversationHandler.END
 
+    # Mapeia hash -> nome da categoria (para usar no category_services)
+    if 'cat_hash_map' not in context.bot_data:
+        context.bot_data['cat_hash_map'] = {}
+
     keyboard = []
     for i in range(0, len(categories), 2):
         cat_name = categories[i]
-        callback_id = cat_name[:40]
-        row = [InlineKeyboardButton(cat_name, callback_data=f"cat_{callback_id}")]
+        hash1 = _get_cat_hash(cat_name)
+        callback_data1 = f"cat_{hash1}"
+        context.bot_data['cat_hash_map'][callback_data1] = cat_name
+        row = [InlineKeyboardButton(cat_name, callback_data=callback_data1)]
+
         if i + 1 < len(categories):
             cat_name2 = categories[i+1]
-            callback_id2 = cat_name2[:40]
-            row.append(InlineKeyboardButton(cat_name2, callback_data=f"cat_{callback_id2}"))
-        keyboard.append(row)
-    keyboard.append([InlineKeyboardButton("🏠 Voltar ao Menu Principal", callback_data="back_to_start")])
+            hash2 = _get_cat_hash(cat_name2)
+            callback_data2 = f"cat_{hash2}"
+            context.bot_data['cat_hash_map'][callback_data2] = cat_name2
+            row.append(InlineKeyboardButton(cat_name2, callback_data=callback_data2))
 
+        keyboard.append(row)
+
+    keyboard.append([InlineKeyboardButton("🏠 Voltar ao Menu Principal", callback_data="back_to_start")])
     reply_markup = InlineKeyboardMarkup(keyboard)
     text = "📦 **ESCOLHA UMA CATEGORIA:**"
 
     if query:
-        await query.answer()
-        try:
-            if query.message.photo:
-                await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode="Markdown")
-            else:
-                await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode="Markdown")
-        except Exception as e:
-            logger.error(f"Erro ao editar list_services: {e}")
+        await safe_edit(query, text, reply_markup)
     else:
         await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
     return SELECTING_SERVICE
 
 async def category_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
-    raw_data = query.data.replace("cat_", "")
-    # Remove emoji se existir
-    if " " in raw_data[:4]:
-        category_partial = raw_data.split(" ", 1)[1]
-    else:
-        category_partial = raw_data
+    if query:
+        try:
+            await query.answer()
+        except Exception:
+            pass
 
-    conn = sqlite3.connect(str(DB_PATH))
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT DISTINCT category FROM services WHERE category LIKE ? AND rate > 0",
-        (f"%{category_partial}%",)
-    )
-    res = cursor.fetchone()
-    conn.close()
-    category = res[0] if res else category_partial
+    callback_data = query.data  # ex: "cat_a1b2c3d4"
+    cat_hash_map = context.bot_data.get('cat_hash_map', {})
+    category_name = cat_hash_map.get(callback_data)
 
-    services = get_services(category)
+    if not category_name:
+        await safe_edit(query, "❌ Categoria inválida. Use /comprar novamente.", None)
+        return SELECTING_SERVICE
+
+    services = get_services(category_name)
     if not services:
-        await query.edit_message_text("❌ Nenhum serviço disponível nesta categoria.")
+        await safe_edit(query, "❌ Nenhum serviço disponível nesta categoria.", None)
         return SELECTING_SERVICE
 
     keyboard = []
     for s in services:
-        # s[1] = name, s[2] = rate (float), s[0] = service_id
         btn_text = f"{s[1]} - R$ {s[2]:.2f}"
         keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"serv_{s[0]}")])
 
+    # Botão voltar para categorias – note que usamos "back_to_categories" (sem hash, é um callback fixo)
     keyboard.append([InlineKeyboardButton("⬅️ Voltar para Categorias", callback_data="back_to_categories")])
     reply_markup = InlineKeyboardMarkup(keyboard)
-    text = f"🚀 **SERVIÇOS: {category.upper()}**"
+    text = f"🚀 **SERVIÇOS: {category_name.upper()}**"
 
-    try:
-        if query.message.photo:
-            await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode="Markdown")
-        else:
-            await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode="Markdown")
-    except Exception as e:
-        logger.error(f"Erro ao editar category_services: {e}")
+    await safe_edit(query, text, reply_markup)
     return SELECTING_SERVICE
 
 async def receive_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -262,7 +279,7 @@ async def receive_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
     service_id = query.data.replace("serv_", "")
     service = get_service_by_id(service_id)
     if not service:
-        await query.edit_message_text("❌ Serviço não encontrado.")
+        await safe_edit(query, "❌ Serviço não encontrado.", None)
         return SELECTING_SERVICE
 
     context.user_data["service_id"] = service[0]
@@ -279,17 +296,19 @@ async def receive_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"_(Digite apenas o número, ex: 500)_"
     )
     category_raw = service[5] if len(service) > 5 else "back"
-    back_callback = f"cat_{category_raw[:40]}"
+    # Gera hash da categoria para o callback (seguro)
+    back_hash = _get_cat_hash(category_raw)
+    back_callback = f"cat_{back_hash}"
+    # Armazena o nome da categoria no mapeamento global (caso não exista)
+    if 'cat_hash_map' not in context.bot_data:
+        context.bot_data['cat_hash_map'] = {}
+    context.bot_data['cat_hash_map'][back_callback] = category_raw
+
     keyboard = [[InlineKeyboardButton("⬅️ Escolher outro Serviço", callback_data=back_callback)]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    try:
-        if query.message.photo:
-            await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode="Markdown")
-        else:
-            await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode="Markdown")
-    except Exception as e:
-        await query.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+    # Usa safe_edit para garantir que a edição funcione (texto ou legenda)
+    await safe_edit(query, text, reply_markup)
     return ASKING_QUANTITY
 
 async def receive_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -393,3 +412,4 @@ async def cancel_to_services(update: Update, context: ContextTypes.DEFAULT_TYPE)
     query = update.callback_query
     await query.answer("Pedido cancelado.")
     return await back_to_categories(update, context)
+
