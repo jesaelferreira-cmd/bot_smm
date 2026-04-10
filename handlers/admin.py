@@ -350,3 +350,37 @@ async def sync_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
     except Exception as e:
         await update.message.reply_text(f"❌ Erro ao executar: `{str(e)}`")
+
+async def test_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Exibe uma amostra dos serviços no banco (apenas admin)"""
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Apenas o administrador.")
+        return
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    # Total de serviços
+    cursor.execute("SELECT COUNT(*) FROM services")
+    total = cursor.fetchone()[0]
+
+    # Categorias distintas
+    cursor.execute("SELECT DISTINCT category FROM services ORDER BY category LIMIT 15")
+    categorias = [row[0] for row in cursor.fetchall()]
+
+    # Primeiros 5 serviços
+    cursor.execute("SELECT service_id, name, rate, category FROM services LIMIT 5")
+    servicos = cursor.fetchall()
+
+    conn.close()
+
+    msg = f"📊 **Total de serviços:** `{total}`\n\n"
+    msg += "📂 **Categorias (amostra):**\n"
+    for cat in categorias:
+        msg += f"• `{cat}`\n"
+
+    msg += "\n🛒 **Primeiros serviços:**\n"
+    for s in servicos:
+        msg += f"• ID `{s[0]}` – {s[1]} (R$ {s[2]:.2f}) – *{s[3]}*\n"
+
+    await update.message.reply_text(msg, parse_mode="Markdown")

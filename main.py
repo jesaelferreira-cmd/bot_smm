@@ -102,16 +102,13 @@ def main():
         app.add_handler(CommandHandler("pedidos", status.my_orders))
         app.add_handler(CommandHandler("pix", balance.pix_command))
         app.add_handler(CommandHandler("sync", admin.sync_services))
-        
-# No arquivo main.py
-# ... dentro da def main():
         app.add_handler(CommandHandler("painel", admin.admin_panel))
         app.add_handler(CommandHandler("margem", admin.set_margin))
         app.add_handler(CommandHandler("promo", admin.set_promo))
         app.add_handler(CommandHandler("atualizar", admin.update_command))
         app.add_handler(CommandHandler("bc", admin.broadcast))
         app.add_handler(CommandHandler("setbalance", admin.set_balance))
-
+        app.add_handler(CommandHandler("test_services", admin.test_services))
 
         # Callbacks Gerais (Menu Principal e Perfil)
         app.add_handler(CallbackQueryHandler(user.show_profile, pattern="^my_profile$"))
