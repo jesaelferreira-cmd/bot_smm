@@ -426,3 +426,38 @@ async def debug_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Envia sem parse_mode (evita erros de formatação)
     await update.message.reply_text(msg)
+
+async def test_api_fields(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    import requests
+    url = os.getenv("SMM_API_URL_1")
+    key = os.getenv("SMM_API_KEY_1")
+    try:
+        r = requests.post(url, data={'key': key, 'action': 'services'}, timeout=30)
+        data = r.json()
+        if isinstance(data, list) and len(data) > 0:
+            primeiro = data[0]
+            campos = list(primeiro.keys())
+            await update.message.reply_text(f"Campos do primeiro serviço:\n{', '.join(campos)}")
+        else:
+            await update.message.reply_text("Resposta inesperada.")
+    except Exception as e:
+        await update.message.reply_text(f"Erro: {e}")
+
+async def check_descriptions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Apenas administrador.")
+        return
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT service_id, name, description FROM services WHERE description IS NOT NULL AND description != '' LIMIT 5")
+    rows = cursor.fetchall()
+    conn.close()
+    if rows:
+        msg = "📝 **Serviços com descrição (até 5):**\n\n"
+        for r in rows:
+            msg += f"🆔 `{r[0]}` – {r[1][:40]}\n📄 {r[2][:100]}\n\n"
+    else:
+        msg = "❌ Nenhum serviço possui descrição no banco."
+    await update.message.reply_text(msg, parse_mode="Markdown")
