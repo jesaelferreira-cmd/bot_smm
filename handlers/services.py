@@ -181,7 +181,6 @@ def get_service_by_id(service_id: str) -> Optional[Tuple]:
 # =========================================================
 async def list_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Exibe o menu de categorias com identificador de provedor."""
-    PROVIDER_PATTERN = re.compile(r'\s*\[C(\d+)\]\s*$')
     query = update.callback_query
     if query:
         try:
@@ -202,20 +201,22 @@ async def list_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.bot_data['cat_hash_map'] = {}
     cat_hash_map = context.bot_data['cat_hash_map']
 
+    # Padrão regex para extrair provedor do final: " [C2]"
+    PROVIDER_PATTERN = re.compile(r'\s*\[C(\d+)\]\s*$')
+
     keyboard = []
     for i in range(0, len(categories), 2):
         display_name = categories[i]
-        try:
-            # Parse do display_name: "Instagram [C1]" -> real_cat = "Instagram", prov = 1 
-    match = PROVIDER_PATTERN.search(display_name)
-    if not match:
-       logger.warning(f"Formato inesperado de categoria (regex falhou): {display_name}")
-       continue
-     prov = int(match.group(1))
-     real_cat = PROVIDER_PATTERN.sub('', display_name).strip()
-        except Exception as e:
-            logger.error(f"Erro ao processar categoria '{display_name}': {e}")
+
+        match = PROVIDER_PATTERN.search(display_name)
+        if not match:
+            logger.warning(f"⚠️ Categoria ignorada (regex não casou): '{display_name}'")
             continue
+
+        prov = int(match.group(1))
+        real_cat = PROVIDER_PATTERN.sub('', display_name).strip()
+
+        logger.info(f"✅ Processando categoria: '{display_name}' -> real='{real_cat}' prov={prov}")
 
         hash1 = _get_cat_hash(display_name)
         callback_data1 = f"cat_{hash1}"
@@ -225,16 +226,16 @@ async def list_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Segunda categoria da linha (se existir)
         if i + 1 < len(categories):
             display_name2 = categories[i+1]
-            try:
-                parts2 = display_name2.split(" [C")
-                if len(parts2) != 2:
-                    logger.warning(f"Formato inesperado de categoria: {display_name2}")
-                    continue
-                real_cat2 = parts2[0].strip()
-                prov2 = int(parts2[1].replace("]", "").strip())
-            except Exception as e:
-                logger.error(f"Erro ao processar categoria '{display_name2}': {e}")
+
+            match2 = PROVIDER_PATTERN.search(display_name2)
+            if not match2:
+                logger.warning(f"⚠️ Categoria ignorada (regex não casou): '{display_name2}'")
                 continue
+
+            prov2 = int(match2.group(1))
+            real_cat2 = PROVIDER_PATTERN.sub('', display_name2).strip()
+
+            logger.info(f"✅ Processando categoria: '{display_name2}' -> real='{real_cat2}' prov={prov2}")
 
             hash2 = _get_cat_hash(display_name2)
             callback_data2 = f"cat_{hash2}"
