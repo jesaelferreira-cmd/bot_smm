@@ -216,7 +216,7 @@ async def list_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prov = int(match.group(1))
         real_cat = PROVIDER_PATTERN.sub('', display_name).strip()
 
-        logger.info(f"✅ Processando categoria: '{display_name}' -> real='{real_cat}' prov={prov}")
+        logger.info(f"✅ Processando categoria: '{display_name}' -> real='{real_cat}' prov=" pro>
 
         hash1 = _get_cat_hash(display_name)
         callback_data1 = f"cat_{hash1}"
