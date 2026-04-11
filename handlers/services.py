@@ -199,7 +199,7 @@ async def list_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if i + 1 < len(categories):
             display_name2 = categories[i+1]
             real_cat2 = display_name2.split(" [C")[0]
-            prov2 = int(display_name2.split("[C")[1].replace("]", ""))
+            prov2 = int(display_name2.split("[C")[2].replace("]", ""))
             hash2 = _get_cat_hash(display_name2)
             callback_data2 = f"cat_{hash2}"
             context.bot_data['cat_hash_map'][callback_data2] = (real_cat2, prov2)
