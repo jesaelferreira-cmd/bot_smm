@@ -2,7 +2,7 @@ import logging
 import sqlite3
 import re
 import hashlib
-from typing import List
+from typing import List, Tuple, Optional
 from config import DB_PATH
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, ConversationHandler
@@ -54,21 +54,17 @@ ICONS_MAP = {
 }
 
 FORBIDDEN_TERMS = ["desativado", "manutenção", "testes", "comunidade", "promoção", "provedor"]
-PRIORITY_MAP = {
-    "📸": 1, "📌": 2, "💬": 3, "📞": 4, "🎮": 5,
-    "🟣": 6, "🚫": 7, "⭐️": 8, "👽": 9, "☁️": 10,
-    "🏀": 11, "📊": 12, "🤖": 13, "🌐": 14, "💎": 15,
-    "🦋": 16, "📱": 17, "🎥": 18, "💻": 19, "🚀": 20
-}
 EMOJI_REGEX = re.compile(r'^[\U00010000-\U0010ffff\u2600-\u26ff\u2700-\u27bf]')
 
 # =========================================================
 # FUNÇÕES AUXILIARES
 # =========================================================
 def _get_cat_hash(cat_name: str) -> str:
+    """Gera hash curto para identificação única da categoria + provedor."""
     return hashlib.md5(cat_name.encode()).hexdigest()[:8]
 
 async def safe_edit(query, text: str, reply_markup=None, parse_mode="Markdown"):
+    """Edita mensagem com segurança, mesmo se original for foto/caption."""
     try:
         await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode=parse_mode)
         return
@@ -97,23 +93,15 @@ def is_valid_category(category: str) -> bool:
     cat_lower = category.lower().strip()
     if not cat_lower or len(cat_lower) < 2:
         return False
-    # Para teste, vamos aceitar todas (comente o bloqueio abaixo)
     # if any(term in cat_lower for term in FORBIDDEN_TERMS):
     #     return False
     return True
 
-def fetch_categories_from_db() -> List[str]:
-    try:
-        with sqlite3.connect(str(DB_PATH)) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT DISTINCT category FROM services WHERE rate > 0")
-            rows = cursor.fetchall()
-            return [row[0] for row in rows if row and row[0]]
-    except Exception as e:
-        logger.error(f"Erro ao buscar categorias: {e}")
-        return []
-
 def get_categories() -> List[str]:
+    """
+    Retorna lista de strings formatadas: "Categoria Real [C{provider}]".
+    Exemplo: "Instagram [C1]", "Instagram [C2]".
+    """
     try:
         with sqlite3.connect(str(DB_PATH)) as conn:
             cursor = conn.cursor()
@@ -122,49 +110,55 @@ def get_categories() -> List[str]:
         result = []
         for cat, prov in rows:
             if cat and len(cat.strip()) >= 2:
-                result.append(f"{cat} [C{prov}]")
+                # Garante que não haja espaços extras na categoria real
+                clean_cat = cat.strip()
+                result.append(f"{clean_cat} [C{prov}]")
+        logger.info(f"Categorias carregadas: {result}")
         return result
     except Exception as e:
         logger.error(f"Erro em get_categories: {e}")
         return []
 
-def get_services(category_name, limit=15):
-    conn = sqlite3.connect(str(DB_PATH))
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT service_id, name, rate, min, max FROM services WHERE category = ? AND rate > 0 ORDER BY rate ASC LIMIT ?",
-        (category_name, limit),
-    )
-    services = cursor.fetchall()
-    conn.close()
-    return services
+def get_services_by_category_and_provider(category_name: str, provider: int, limit: int = 15) -> List[Tuple]:
+    """
+    Busca serviços de uma categoria específica de UM provedor.
+    """
+    try:
+        with sqlite3.connect(str(DB_PATH)) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT service_id, name, rate, min, max
+                FROM services
+                WHERE category = ? AND provider = ? AND rate > 0
+                ORDER BY rate ASC
+                LIMIT ?
+            """, (category_name, provider, limit))
+            services = cursor.fetchall()
+        logger.info(f"Serviços encontrados para '{category_name}' (C{provider}): {len(services)}")
+        return services
+    except Exception as e:
+        logger.error(f"Erro ao buscar serviços para {category_name} C{provider}: {e}")
+        return []
 
-def get_services_by_category_and_provider(category_name, provider, limit=15):
-    conn = sqlite3.connect(str(DB_PATH))
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT service_id, name, rate, min, max FROM services WHERE category = ? AND provider = ? AND rate > 0 ORDER BY rate ASC LIMIT ?",
-        (category_name, provider, limit),
-    )
-    services = cursor.fetchall()
-    conn.close()
-    return services
-
-def get_service_by_id(service_id):
-    conn = sqlite3.connect(str(DB_PATH))
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT service_id, name, rate, min, max, category, provider, description FROM services WHERE service_id = ?",
-        (service_id,),
-    )
-    service = cursor.fetchone()
-    conn.close()
-    return service
+def get_service_by_id(service_id: str) -> Optional[Tuple]:
+    try:
+        with sqlite3.connect(str(DB_PATH)) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT service_id, name, rate, min, max, category, provider, description
+                FROM services
+                WHERE service_id = ?
+            """, (service_id,))
+            return cursor.fetchone()
+    except Exception as e:
+        logger.error(f"Erro ao buscar serviço {service_id}: {e}")
+        return None
 
 # =========================================================
 # HANDLERS
 # =========================================================
 async def list_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Exibe o menu de categorias com identificador de provedor."""
     query = update.callback_query
     if query:
         try:
@@ -180,29 +174,48 @@ async def list_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ Nenhum serviço disponível. Tente mais tarde.")
         return ConversationHandler.END
 
+    # Inicializa o mapa de hashes no bot_data se não existir
     if 'cat_hash_map' not in context.bot_data:
         context.bot_data['cat_hash_map'] = {}
+    cat_hash_map = context.bot_data['cat_hash_map']
 
     keyboard = []
     for i in range(0, len(categories), 2):
         display_name = categories[i]
-        # Extrai categoria real e fornecedor
-        parts = display_name.split(" [C")
-        real_cat = parts[0]
-        prov = int(parts[1].replace("]", ""))
+        try:
+            # Parse do display_name: "Instagram [C1]" -> real_cat = "Instagram", prov = 1
+            parts = display_name.split(" [C")
+            if len(parts) != 2:
+                logger.warning(f"Formato inesperado de categoria: {display_name}")
+                continue
+            real_cat = parts[0].strip()
+            prov = int(parts[1].replace("]", "").strip())
+        except Exception as e:
+            logger.error(f"Erro ao processar categoria '{display_name}': {e}")
+            continue
+
         hash1 = _get_cat_hash(display_name)
         callback_data1 = f"cat_{hash1}"
-        context.bot_data['cat_hash_map'][callback_data1] = (real_cat, prov)
+        cat_hash_map[callback_data1] = (real_cat, prov)
         row = [InlineKeyboardButton(display_name, callback_data=callback_data1)]
 
+        # Segunda categoria da linha (se existir)
         if i + 1 < len(categories):
             display_name2 = categories[i+1]
-            parts2 = display_name2.split(" [C")
-            real_cat2 = parts2[0]
-            prov2 = int(parts2[1].replace("]", ""))
+            try:
+                parts2 = display_name2.split(" [C")
+                if len(parts2) != 2:
+                    logger.warning(f"Formato inesperado de categoria: {display_name2}")
+                    continue
+                real_cat2 = parts2[0].strip()
+                prov2 = int(parts2[1].replace("]", "").strip())
+            except Exception as e:
+                logger.error(f"Erro ao processar categoria '{display_name2}': {e}")
+                continue
+
             hash2 = _get_cat_hash(display_name2)
             callback_data2 = f"cat_{hash2}"
-            context.bot_data['cat_hash_map'][callback_data2] = (real_cat2, prov2)
+            cat_hash_map[callback_data2] = (real_cat2, prov2)
             row.append(InlineKeyboardButton(display_name2, callback_data=callback_data2))
 
         keyboard.append(row)
@@ -218,6 +231,7 @@ async def list_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SELECTING_SERVICE
 
 async def category_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Exibe os serviços disponíveis para a categoria + provedor selecionados."""
     query = update.callback_query
     if query:
         try:
@@ -228,18 +242,23 @@ async def category_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cat_hash_map = context.bot_data.get('cat_hash_map', {})
     info = cat_hash_map.get(query.data)
     if not info:
+        logger.warning(f"Callback {query.data} não encontrado no cat_hash_map")
         await safe_edit(query, "❌ Categoria inválida. Use /comprar novamente.", None)
         return SELECTING_SERVICE
 
     real_category, provider = info
+    logger.info(f"Categoria selecionada: '{real_category}' (C{provider})")
+
     services = get_services_by_category_and_provider(real_category, provider)
 
     if not services:
-        await safe_edit(query, "❌ Nenhum serviço disponível nesta categoria.", None)
+        logger.warning(f"Nenhum serviço encontrado para {real_category} C{provider}")
+        await safe_edit(query, f"❌ Nenhum serviço disponível em **{real_category} [C{provider}]** no momento.", None)
         return SELECTING_SERVICE
 
     keyboard = []
     for s in services:
+        # s[1] = name, s[2] = rate
         btn_text = f"{s[1]} - R$ {s[2]:.2f}"
         keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"serv_{s[0]}")])
 
@@ -251,6 +270,7 @@ async def category_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SELECTING_SERVICE
 
 async def receive_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Recebe a escolha de um serviço específico e mostra detalhes."""
     query = update.callback_query
     await query.answer()
     service_id = query.data.replace("serv_", "")
@@ -259,7 +279,7 @@ async def receive_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit(query, "❌ Serviço não encontrado.", None)
         return SELECTING_SERVICE
 
-    # Armazena dados do serviço
+    # Armazena dados do serviço no user_data
     context.user_data["service_id"] = service[0]
     context.user_data["service_name"] = service[1]
     context.user_data["rate"] = float(service[2])
@@ -288,13 +308,13 @@ async def receive_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     # Salva a categoria original para possível volta
-    category_raw = service[5] if len(service) > 5 else "back"
-    context.user_data["service_category"] = category_raw
+    context.user_data["service_category"] = service[5] if len(service) > 5 else ""
 
     await safe_edit(query, text, reply_markup)
     return WAIT_CONFIRM_PRICE
 
 async def proceed_to_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Solicita ao usuário a quantidade desejada."""
     query = update.callback_query
     await query.answer()
     text = (
@@ -302,31 +322,36 @@ async def proceed_to_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"❓ **Quanto deseja comprar?**\n"
         f"_(Digite apenas o número, ex: 500)_"
     )
-    # Usa safe_edit em vez de edit_message_text diretamente
     await safe_edit(query, text, None)
     return ASKING_QUANTITY
 
 async def receive_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Valida a quantidade digitada e calcula o preço total."""
     user_data = context.user_data
     text_input = update.message.text.strip()
     if not text_input.isdigit():
         await update.message.reply_text("⚠️ Por favor, digite apenas números (ex: 500).")
         return ASKING_QUANTITY
+
     quantity = int(text_input)
     rate = user_data.get('rate')
     if rate is None:
         await update.message.reply_text("⚠️ Sessão expirada. Use /comprar novamente.")
         return ConversationHandler.END
+
     service_min = user_data.get('min', 0)
     service_max = user_data.get('max', 999999)
+
     if quantity < service_min or quantity > service_max:
         await update.message.reply_text(
             f"❌ **Quantidade Inválida!**\nMínimo: **{service_min}** | Máximo: **{service_max}**\nDigite um valor válido:"
         )
         return ASKING_QUANTITY
+
     total_price = (rate / 1000) * quantity
     user_data['quantity'] = quantity
     user_data['total_price'] = round(total_price, 2)
+
     keyboard = [
         [
             InlineKeyboardButton("✅ Confirmar Valor", callback_data="confirm_price"),
@@ -345,17 +370,18 @@ async def receive_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return WAIT_CONFIRM_PRICE
 
 async def confirm_price_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Avança para solicitação do link."""
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text(
-        "🔗 **Envie o link do Perfil ou Post:**\n_(Certifique-se que o perfil está público)_",
-        parse_mode="Markdown"
-    )
+    # Correção: uso de safe_edit para evitar erro em mensagens com foto
+    await safe_edit(query, "🔗 **Envie o link do Perfil ou Post:**\n_(Certifique-se que o perfil está público)_")
     return ASKING_LINK
 
 async def receive_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Recebe o link e pede confirmação final."""
     link = update.message.text.strip()
     context.user_data['link'] = link
+
     keyboard = [
         [InlineKeyboardButton("🚀 FINALIZAR PEDIDO", callback_data="execute_order")],
         [InlineKeyboardButton("❌ CANCELAR", callback_data="cancel_order")]
@@ -373,15 +399,18 @@ async def receive_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return CONFIRMING
 
 async def execute_order_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Encaminha para a função de finalização do pedido."""
     query = update.callback_query
     await query.answer("Processando pedido...")
     return await confirm_order(update, context)
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancela a operação atual."""
     await update.message.reply_text("❌ Ação cancelada com sucesso.")
     return ConversationHandler.END
 
 async def back_to_categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Retorna ao menu de categorias."""
     query = update.callback_query
     if query:
         await query.answer()
@@ -389,6 +418,7 @@ async def back_to_categories(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return ConversationHandler.END
 
 async def cancel_to_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancela pedido e volta às categorias."""
     query = update.callback_query
     await query.answer("Pedido cancelado.")
     return await back_to_categories(update, context)
