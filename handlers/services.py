@@ -181,6 +181,7 @@ def get_service_by_id(service_id: str) -> Optional[Tuple]:
 # =========================================================
 async def list_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Exibe o menu de categorias com identificador de provedor."""
+    PROVIDER_PATTERN = re.compile(r'\s*\[C(\d+)\]\s*$')
     query = update.callback_query
     if query:
         try:
@@ -205,13 +206,13 @@ async def list_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for i in range(0, len(categories), 2):
         display_name = categories[i]
         try:
-            # Parse do display_name: "Instagram [C1]" -> real_cat = "Instagram", prov = 1
-            parts = display_name.split(" [C")
-            if len(parts) != 2:
-                logger.warning(f"Formato inesperado de categoria: {display_name}")
-                continue
-            real_cat = parts[0].strip()
-            prov = int(parts[1].replace("]", "").strip())
+            # Parse do display_name: "Instagram [C1]" -> real_cat = "Instagram", prov = 1 
+    match = PROVIDER_PATTERN.search(display_name)
+    if not match:
+       logger.warning(f"Formato inesperado de categoria (regex falhou): {display_name}")
+       continue
+     prov = int(match.group(1))
+     real_cat = PROVIDER_PATTERN.sub('', display_name).strip()
         except Exception as e:
             logger.error(f"Erro ao processar categoria '{display_name}': {e}")
             continue

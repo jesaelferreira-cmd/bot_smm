@@ -17,6 +17,20 @@ user_locks = {}
 # ------------------------------------------------------------
 # FUNÇÃO AUXILIAR: converte centavos (int) para float com 2 casas
 # ------------------------------------------------------------
+async def safe_edit(query, text: str, reply_markup=None, parse_mode="Markdown"):
+    """Edita mensagem com texto ou legenda, com fallback para nova mensagem."""
+    try:
+        await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode=parse_mode)
+        return
+    except Exception:
+        pass
+    try:
+        await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode=parse_mode)
+        return
+    except Exception:
+        pass
+    await query.message.reply_text(text=text, reply_markup=reply_markup, parse_mode=parse_mode)
+
 def cents_to_float(cents: int) -> float:
     return round(cents / 100.0, 2)
 

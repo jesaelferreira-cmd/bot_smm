@@ -461,3 +461,59 @@ async def check_descriptions(update: Update, context: ContextTypes.DEFAULT_TYPE)
     else:
         msg = "❌ Nenhum serviço possui descrição no banco."
     await update.message.reply_text(msg, parse_mode="Markdown")
+
+sync def list_providers(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    # Contagem por fornecedor
+    cursor.execute("SELECT provider, COUNT(*) FROM services GROUP BY provider")
+    counts = cursor.fetchall()
+    msg = "📊 Serviços por fornecedor:\n"
+    for prov, count in counts:
+        msg += f"  Fornecedor {prov}: {count}\n"
+    # Amostra de categorias do fornecedor 2
+    cursor.execute("SELECT DISTINCT category FROM services WHERE provider = 2 LIMIT 10")
+    cats2 = cursor.fetchall()
+    msg += "\n📂 Categorias do Fornecedor 2 (amostra):\n"
+    for cat in cats2:
+        msg += f"  - {cat[0]}\n"
+    # Amostra de categorias do fornecedor 1
+    cursor.execute("SELECT DISTINCT category FROM services WHERE provider = 1 LIMIT 10")
+    cats1 = cursor.fetchall()
+    msg += "\n📂 Categorias do Fornecedor 1 (amostra):\n"
+    for cat in cats1:
+        msg += f"  - {cat[0]}\n"
+    conn.close()
+    await update.message.reply_text(msg)
+
+async def debug_categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Comando /debug_cats - Mostra quantas categorias de cada provedor
+    estão sendo retornadas por get_categories().
+    """
+    from handlers.services import get_categories   # import local para evitar circular
+
+    cats = get_categories()
+    if not cats:
+        await update.message.reply_text("⚠️ Nenhuma categoria retornada.")
+        return
+
+    c1 = [c for c in cats if '[C1]' in c]
+    c2 = [c for c in cats if '[C2]' in c]
+
+    msg = (
+        f"📊 **Total de categorias:** {len(cats)}\n"
+        f"🔵 Fornecedor 1: {len(c1)}\n"
+        f"🟢 Fornecedor 2: {len(c2)}\n\n"
+    )
+
+    if c2:
+        # Mostra as primeiras 15 categorias do C2 para inspeção
+        preview = "\n".join(c2[:15])
+        msg += f"**Exemplos C2:**\n{preview}"
+    else:
+        msg += "❌ **Nenhuma categoria do Fornecedor 2 foi retornada!**"
+
+    await update.message.reply_text(msg, parse_mode="Markdown")

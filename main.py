@@ -111,6 +111,8 @@ def main():
         app.add_handler(CommandHandler("test_services", admin.test_services))
         app.add_handler(CommandHandler("test_api_fields", admin.test_api_fields))
         app.add_handler(CommandHandler("check_descriptions", admin.check_descriptions))
+        app.add_handler(CommandHandler("list_providers", admin.list_providers))
+        app.add_handler(CommandHandler("debug_cats", debug_categories))
 
         # Callbacks Gerais (Menu Principal e Perfil)
         app.add_handler(CallbackQueryHandler(user.show_profile, pattern="^my_profile$"))
