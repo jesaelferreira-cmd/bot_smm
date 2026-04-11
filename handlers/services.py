@@ -114,7 +114,6 @@ def fetch_categories_from_db() -> List[str]:
         return []
 
 def get_categories() -> List[str]:
-    """Retorna categorias únicas por fornecedor, com identificador [C1] ou [C2]."""
     try:
         with sqlite3.connect(str(DB_PATH)) as conn:
             cursor = conn.cursor()
@@ -184,13 +183,13 @@ async def list_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 'cat_hash_map' not in context.bot_data:
         context.bot_data['cat_hash_map'] = {}
 
-    # Constrói teclado
     keyboard = []
     for i in range(0, len(categories), 2):
         display_name = categories[i]
-        # Extrai a categoria real e o fornecedor a partir do display (ex: "Instagram [C1]")
-        real_cat = display_name.split(" [C")[0]
-        prov = int(display_name.split("[C")[1].replace("]", ""))
+        # Extrai categoria real e fornecedor
+        parts = display_name.split(" [C")
+        real_cat = parts[0]
+        prov = int(parts[1].replace("]", ""))
         hash1 = _get_cat_hash(display_name)
         callback_data1 = f"cat_{hash1}"
         context.bot_data['cat_hash_map'][callback_data1] = (real_cat, prov)
@@ -198,12 +197,14 @@ async def list_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if i + 1 < len(categories):
             display_name2 = categories[i+1]
-            real_cat2 = display_name2.split(" [C")[0]
-            prov2 = int(display_name2.split("[C")[2].replace("]", ""))
+            parts2 = display_name2.split(" [C")
+            real_cat2 = parts2[0]
+            prov2 = int(parts2[1].replace("]", ""))
             hash2 = _get_cat_hash(display_name2)
             callback_data2 = f"cat_{hash2}"
             context.bot_data['cat_hash_map'][callback_data2] = (real_cat2, prov2)
             row.append(InlineKeyboardButton(display_name2, callback_data=callback_data2))
+
         keyboard.append(row)
 
     keyboard.append([InlineKeyboardButton("🏠 Voltar ao Menu Principal", callback_data="back_to_start")])
