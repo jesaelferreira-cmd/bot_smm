@@ -114,14 +114,19 @@ def fetch_categories_from_db() -> List[str]:
         return []
 
 def get_categories() -> List[str]:
-    """Retorna categorias reais (sem normalização que altera o texto)."""
+    """Retorna categorias únicas por fornecedor, com identificador [C1] ou [C2]."""
     try:
-        raw = fetch_categories_from_db()
-        filtered = [cat for cat in raw if is_valid_category(cat)]
-        unique = list(dict.fromkeys(filtered))
-        return unique
+        with sqlite3.connect(str(DB_PATH)) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT DISTINCT category, provider FROM services WHERE rate > 0")
+            rows = cursor.fetchall()
+        result = []
+        for cat, prov in rows:
+            if cat and len(cat.strip()) >= 2:
+                result.append(f"{cat} [C{prov}]")
+        return result
     except Exception as e:
-        logger.error(f"Erro no pipeline de categorias: {e}")
+        logger.error(f"Erro em get_categories: {e}")
         return []
 
 def get_services(category_name, limit=15):
@@ -130,6 +135,17 @@ def get_services(category_name, limit=15):
     cursor.execute(
         "SELECT service_id, name, rate, min, max FROM services WHERE category = ? AND rate > 0 ORDER BY rate ASC LIMIT ?",
         (category_name, limit),
+    )
+    services = cursor.fetchall()
+    conn.close()
+    return services
+
+def get_services_by_category_and_provider(category_name, provider, limit=15):
+    conn = sqlite3.connect(str(DB_PATH))
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT service_id, name, rate, min, max FROM services WHERE category = ? AND provider = ? AND rate > 0 ORDER BY rate ASC LIMIT ?",
+        (category_name, provider, limit),
     )
     services = cursor.fetchall()
     conn.close()
@@ -168,19 +184,26 @@ async def list_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 'cat_hash_map' not in context.bot_data:
         context.bot_data['cat_hash_map'] = {}
 
+    # Constrói teclado
     keyboard = []
     for i in range(0, len(categories), 2):
-        cat_name = categories[i]
-        hash1 = _get_cat_hash(cat_name)
+        display_name = categories[i]
+        # Extrai a categoria real e o fornecedor a partir do display (ex: "Instagram [C1]")
+        real_cat = display_name.split(" [C")[0]
+        prov = int(display_name.split("[C")[1].replace("]", ""))
+        hash1 = _get_cat_hash(display_name)
         callback_data1 = f"cat_{hash1}"
-        context.bot_data['cat_hash_map'][callback_data1] = cat_name
-        row = [InlineKeyboardButton(normalize_category(cat_name), callback_data=callback_data1)]
+        context.bot_data['cat_hash_map'][callback_data1] = (real_cat, prov)
+        row = [InlineKeyboardButton(display_name, callback_data=callback_data1)]
+
         if i + 1 < len(categories):
-            cat_name2 = categories[i+1]
-            hash2 = _get_cat_hash(cat_name2)
+            display_name2 = categories[i+1]
+            real_cat2 = display_name2.split(" [C")[0]
+            prov2 = int(display_name2.split("[C")[1].replace("]", ""))
+            hash2 = _get_cat_hash(display_name2)
             callback_data2 = f"cat_{hash2}"
-            context.bot_data['cat_hash_map'][callback_data2] = cat_name2
-            row.append(InlineKeyboardButton(normalize_category(cat_name2), callback_data=callback_data2))
+            context.bot_data['cat_hash_map'][callback_data2] = (real_cat2, prov2)
+            row.append(InlineKeyboardButton(display_name2, callback_data=callback_data2))
         keyboard.append(row)
 
     keyboard.append([InlineKeyboardButton("🏠 Voltar ao Menu Principal", callback_data="back_to_start")])
@@ -202,12 +225,14 @@ async def category_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
     cat_hash_map = context.bot_data.get('cat_hash_map', {})
-    category_name = cat_hash_map.get(query.data)
-    if not category_name:
+    info = cat_hash_map.get(query.data)
+    if not info:
         await safe_edit(query, "❌ Categoria inválida. Use /comprar novamente.", None)
         return SELECTING_SERVICE
 
-    services = get_services(category_name)
+    real_category, provider = info
+    services = get_services_by_category_and_provider(real_category, provider)
+
     if not services:
         await safe_edit(query, "❌ Nenhum serviço disponível nesta categoria.", None)
         return SELECTING_SERVICE
@@ -219,7 +244,7 @@ async def category_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard.append([InlineKeyboardButton("⬅️ Voltar para Categorias", callback_data="back_to_categories")])
     reply_markup = InlineKeyboardMarkup(keyboard)
-    text = f"🚀 **SERVIÇOS: {category_name}**"
+    text = f"🚀 **SERVIÇOS: {real_category} [C{provider}]**"
 
     await safe_edit(query, text, reply_markup)
     return SELECTING_SERVICE
