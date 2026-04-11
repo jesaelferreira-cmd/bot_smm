@@ -140,6 +140,28 @@ def get_services_by_category_and_provider(category_name: str, provider: int, lim
         logger.error(f"Erro ao buscar serviços para {category_name} C{provider}: {e}")
         return []
 
+def get_services(category_name: str, limit: int = 15) -> List[Tuple]:
+    """
+    Busca serviços de uma categoria em TODOS os provedores.
+    Mantida para compatibilidade com buttons.py e outras partes antigas.
+    """
+    try:
+        with sqlite3.connect(str(DB_PATH)) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT service_id, name, rate, min, max, provider
+                FROM services
+                WHERE category = ? AND rate > 0
+                ORDER BY rate ASC
+                LIMIT ?
+            """, (category_name, limit))
+            services = cursor.fetchall()
+        logger.info(f"[get_services] Categoria '{category_name}': {len(services)} serviços (todos provedores)")
+        return services
+    except Exception as e:
+        logger.error(f"Erro em get_services para {category_name}: {e}")
+        return []
+
 def get_service_by_id(service_id: str) -> Optional[Tuple]:
     try:
         with sqlite3.connect(str(DB_PATH)) as conn:
