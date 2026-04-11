@@ -6,7 +6,6 @@ from typing import List, Tuple, Optional
 from config import DB_PATH
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, ConversationHandler
-from handlers.orders import confirm_order
 
 logger = logging.getLogger(__name__)
 
@@ -108,36 +107,16 @@ def get_categories() -> List[str]:
             cursor.execute("SELECT DISTINCT category, provider FROM services WHERE rate > 0")
             rows = cursor.fetchall()
         result = []
+        count_prov = {}
         for cat, prov in rows:
             if cat and len(cat.strip()) >= 2:
-                # Garante que não haja espaços extras na categoria real
                 clean_cat = cat.strip()
                 result.append(f"{clean_cat} [C{prov}]")
-        logger.info(f"Categorias carregadas: {result}")
+                count_prov[prov] = count_prov.get(prov, 0) + 1
+        logger.info(f"Categorias carregadas por provedor: {count_prov}")
         return result
     except Exception as e:
         logger.error(f"Erro em get_categories: {e}")
-        return []
-
-def get_services_by_category_and_provider(category_name: str, provider: int, limit: int = 15) -> List[Tuple]:
-    """
-    Busca serviços de uma categoria específica de UM provedor.
-    """
-    try:
-        with sqlite3.connect(str(DB_PATH)) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT service_id, name, rate, min, max
-                FROM services
-                WHERE category = ? AND provider = ? AND rate > 0
-                ORDER BY rate ASC
-                LIMIT ?
-            """, (category_name, provider, limit))
-            services = cursor.fetchall()
-        logger.info(f"Serviços encontrados para '{category_name}' (C{provider}): {len(services)}")
-        return services
-    except Exception as e:
-        logger.error(f"Erro ao buscar serviços para {category_name} C{provider}: {e}")
         return []
 
 def get_services(category_name: str, limit: int = 15) -> List[Tuple]:
@@ -160,6 +139,27 @@ def get_services(category_name: str, limit: int = 15) -> List[Tuple]:
         return services
     except Exception as e:
         logger.error(f"Erro em get_services para {category_name}: {e}")
+        return []
+
+def get_services_by_category_and_provider(category_name: str, provider: int, limit: int = 15) -> List[Tuple]:
+    """
+    Busca serviços de uma categoria específica de UM provedor.
+    """
+    try:
+        with sqlite3.connect(str(DB_PATH)) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT service_id, name, rate, min, max
+                FROM services
+                WHERE category = ? AND provider = ? AND rate > 0
+                ORDER BY rate ASC
+                LIMIT ?
+            """, (category_name, provider, limit))
+            services = cursor.fetchall()
+        logger.info(f"Serviços encontrados para '{category_name}' (C{provider}): {len(services)}")
+        return services
+    except Exception as e:
+        logger.error(f"Erro ao buscar serviços para {category_name} C{provider}: {e}")
         return []
 
 def get_service_by_id(service_id: str) -> Optional[Tuple]:
@@ -216,7 +216,7 @@ async def list_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prov = int(match.group(1))
         real_cat = PROVIDER_PATTERN.sub('', display_name).strip()
 
-        logger.info(f"✅ Processando categoria: '{display_name}' -> real='{real_cat}' prov=" pro>
+        logger.info(f"✅ Processando categoria: '{display_name}' -> real='{real_cat}' prov={prov}")
 
         hash1 = _get_cat_hash(display_name)
         callback_data1 = f"cat_{hash1}"
@@ -397,7 +397,6 @@ async def confirm_price_callback(update: Update, context: ContextTypes.DEFAULT_T
     """Avança para solicitação do link."""
     query = update.callback_query
     await query.answer()
-    # Correção: uso de safe_edit para evitar erro em mensagens com foto
     await safe_edit(query, "🔗 **Envie o link do Perfil ou Post:**\n_(Certifique-se que o perfil está público)_")
     return ASKING_LINK
 
@@ -426,6 +425,8 @@ async def execute_order_callback(update: Update, context: ContextTypes.DEFAULT_T
     """Encaminha para a função de finalização do pedido."""
     query = update.callback_query
     await query.answer("Processando pedido...")
+    # Importação local para evitar circularidade
+    from handlers.orders import confirm_order
     return await confirm_order(update, context)
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
