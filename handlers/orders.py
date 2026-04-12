@@ -1,10 +1,13 @@
 import requests
 import sqlite3
+import logging
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 from config import DB_PATH, SMM_API_URL_1, SMM_API_KEY_1, SMM_API_URL_2, SMM_API_KEY_2
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
+
+logger = logging.getLogger(__name__)
 
 # ------------------------------------------------------------
 # FUNÇÕES AUXILIARES (centavos)
@@ -22,7 +25,6 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data = context.user_data
     user_id = update.effective_user.id
 
-    # Suporte para callback_query (botão) ou mensagem direta
     query = update.callback_query
     if query:
         await query.answer("Processando pedido...")
@@ -30,28 +32,47 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         message = update.message
 
+    # Verificações básicas
     if 'service_id' not in user_data:
+        logger.error("service_id não encontrado no user_data")
+        await message.reply_text("❌ Sessão expirada. Use /comprar novamente.")
         return ConversationHandler.END
 
-    total_price_float = user_data['total_price']          # float (ex: 12.50)
-    total_price_cents = float_to_cents(total_price_float) # inteiro (ex: 1250)
+    total_price_float = user_data['total_price']
+    total_price_cents = float_to_cents(total_price_float)
+
+    # Recupera o ID do provedor (padrão 1 se não existir)
+    provider_id = user_data.get('provider_id', 1)
+    logger.info(f"Processando pedido para provedor {provider_id}")
+
+    # Define URL, chave e campo do serviço conforme o provedor
+    if provider_id == 1:
+        api_url = SMM_API_URL_1
+        api_key = SMM_API_KEY_1
+        service_field = 'service'      # Campo padrão para provedor 1
+    elif provider_id == 2:
+        api_url = SMM_API_URL_2
+        api_key = SMM_API_KEY_2
+        service_field = 'service'      # ⚠️ ALTERE AQUI se o provedor 2 usar 'service_id' ou outro nome
+    else:
+        logger.error(f"Provedor desconhecido: {provider_id}")
+        await message.reply_text("❌ Provedor desconhecido. Contate o suporte.")
+        return ConversationHandler.END
 
     conn = sqlite3.connect(DB_PATH, timeout=10)
     cursor = conn.cursor()
 
     try:
-        # 1. DEBITAR SALDO (em centavos, com verificação de saldo suficiente)
+        # 1. DEBITAR SALDO (com verificação de saldo suficiente)
         cursor.execute("""
-            UPDATE users 
+            UPDATE users
             SET main_balance_cents = main_balance_cents - ?
             WHERE user_id = ? AND main_balance_cents >= ?
         """, (total_price_cents, user_id, total_price_cents))
 
         if cursor.rowcount == 0:
-            # Saldo insuficiente → oferece botão de recarga
             keyboard = [[InlineKeyboardButton("💳 Adicionar Saldo (PIX)", callback_data="add_balance")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
-
             await message.reply_text(
                 f"❌ **Saldo Insuficiente!**\n\n"
                 f"O pedido custa **R$ {total_price_float:.2f}**, mas seu saldo atual não cobre este valor.\n"
@@ -62,30 +83,31 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
             conn.close()
             return ConversationHandler.END
 
-        conn.commit()  # debita o saldo antes de chamar a API
+        conn.commit()
+        logger.info(f"Saldo debitado: user={user_id}, valor={total_price_cents} centavos")
 
-        # 2. DEFINIR PROVEDOR (pode ser dinâmico no futuro)
-        url, key = SMM_API_URL_1, SMM_API_KEY_1  # padrão
-
+        # 2. MONTAR PAYLOAD DINAMICAMENTE
         payload = {
-            'key': key,
+            'key': api_key,
             'action': 'add',
-            'service': user_data['service_id'],
+            service_field: user_data['service_id'],
             'link': user_data['link'],
             'quantity': user_data['quantity']
         }
 
-        # 3. CHAMADA À API DO FORNECEDOR
-        res = requests.post(url, data=payload, timeout=20)
+        logger.info(f"Enviando pedido para provedor {provider_id}: URL={api_url}, payload={payload}")
+
+        # 3. CHAMADA À API
+        res = requests.post(api_url, data=payload, timeout=20)
         response = res.json()
+        logger.info(f"Resposta da API provedor {provider_id}: {response}")
 
         # 4. TRATAR RESPOSTA
         if 'order' in response:
             order_id_api = response['order']
             data_atual = datetime.now().strftime("%d/%m/%Y %H:%M")
 
-            # Verifica se a tabela orders tem a coluna amount_cents (recomendado)
-            # Se não tiver, usamos amount (FLOAT) para compatibilidade
+            # Insere pedido no banco (compatível com ambas as estruturas)
             cursor.execute("PRAGMA table_info(orders)")
             columns = [col[1] for col in cursor.fetchall()]
             if 'amount_cents' in columns:
@@ -94,15 +116,15 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (user_id, user_data['service_name'], user_data['quantity'], total_price_cents, order_id_api, "Pendente", data_atual))
             else:
-                # Fallback para coluna antiga (FLOAT)
                 cursor.execute("""
                     INSERT INTO orders (user_id, service_name, quantity, amount, order_id_api, status, date)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (user_id, user_data['service_name'], user_data['quantity'], total_price_float, order_id_api, "Pendente", data_atual))
 
             conn.commit()
+            logger.info(f"Pedido registrado no banco: order_id_api={order_id_api}")
 
-            # Botões de navegação
+            # Mensagem de sucesso
             keyboard = [
                 [
                     InlineKeyboardButton("📊 Status do Pedido", callback_data=f"status_{order_id_api}"),
@@ -126,21 +148,21 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await message.reply_text(msg_sucesso, reply_markup=reply_markup, parse_mode="Markdown")
 
         else:
-            # Se a API do fornecedor falhar, estorna o saldo (reverte o débito)
+            # Estornar saldo
             cursor.execute("""
-                UPDATE users 
+                UPDATE users
                 SET main_balance_cents = main_balance_cents + ?
                 WHERE user_id = ?
             """, (total_price_cents, user_id))
             conn.commit()
 
             error_msg = response.get('error', 'Erro desconhecido')
+            logger.error(f"Erro da API provedor {provider_id}: {error_msg}")
             await message.reply_text(f"❌ Erro no provedor: {error_msg}\nSeu saldo foi estornado.")
 
     except Exception as e:
-        # Em caso de qualquer exceção (rede, timeout, etc), estorna o saldo
         conn.rollback()
-        print(f"❌ ERRO NO PEDIDO: {e}")
+        logger.error(f"❌ ERRO NO PEDIDO: {e}")
         await message.reply_text("⚠️ Erro interno ao processar. Tente novamente.")
     finally:
         conn.close()
