@@ -1,9 +1,12 @@
 import os
 import sqlite3
+import logging
 from config import DB_PATH
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 from utils.rate_limit import rate_limit
+
+logger = logging.getLogger(__name__)
 
 @rate_limit(seconds=3)
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -13,20 +16,55 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
 
     # --- 1. LÓGICA DE AFILIADOS (CAPTURA INDICAÇÃO) ---
-    if context.args and not query:
-        referrer_id = context.args[0]
-        # Verifica se o ID é número e se não é o próprio usuário se auto-indicando
-        if referrer_id.isdigit() and int(referrer_id) != user_id:
+# --- 1. LÓGICA DE AFILIADOS (CAPTURA INDICAÇÃO) ---
+if context.args and not query:
+    referrer_id_str = context.args[0]
+    logger.info(f"📎 /start com argumentos: {context.args} | user={user_id}")
+
+    if referrer_id_str.isdigit():
+        referrer_id = int(referrer_id_str)
+        if referrer_id != user_id:
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
-            # Só registra se o usuário for novo (referred_by ainda é NULL)
+
+            # Garante que a coluna referred_by existe (cria se necessário)
+            cursor.execute("PRAGMA table_info(users)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if 'referred_by' not in columns:
+                cursor.execute("ALTER TABLE users ADD COLUMN referred_by INTEGER")
+                conn.commit()
+                logger.info("Coluna 'referred_by' adicionada à tabela users")
+
+            # Insere ou ignora o usuário (garante que ele existe)
+            cursor.execute(
+                "INSERT OR IGNORE INTO users (user_id, first_name, username, balance, main_balance_cents, affiliate_balance_cents) "
+                "VALUES (?, ?, ?, 0.0, 0, 0)",
+                (user_id, user.first_name, user.username)
+            )
+
+            # Tenta atualizar o referenciador apenas se ainda não estiver definido
             cursor.execute(
                 "UPDATE users SET referred_by = ? WHERE user_id = ? AND referred_by IS NULL",
                 (referrer_id, user_id)
             )
             conn.commit()
-            conn.close()
 
+            if cursor.rowcount > 0:
+                logger.info(f"✅ Indicação registrada: user={user_id} foi indicado por {referrer_id}")
+            else:
+                # Verifica se já tinha referenciador
+                cursor.execute("SELECT referred_by FROM users WHERE user_id = ?", (user_id,))
+                current_ref = cursor.fetchone()
+                if current_ref and current_ref[0]:
+                    logger.info(f"ℹ️ Usuário {user_id} já possui referenciador {current_ref[0]}, ignorando.")
+                else:
+                    logger.warning(f"⚠️ UPDATE não afetou linhas para user={user_id} (possível condição de corrida)")
+
+            conn.close()
+        else:
+            logger.info(f"❌ Tentativa de autoindicação ignorada: user={user_id}")
+    else:
+        logger.info(f"❌ Argumento inválido (não numérico): {referrer_id_str}")
     # --- 2. BUSCA DADOS DO USUÁRIO NO BANCO ---
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
