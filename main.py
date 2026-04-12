@@ -29,6 +29,8 @@ from database.connection import init_database
 # Importar handlers
 from handlers import start, balance, services, orders, buttons, status, admin, affiliates, user
 from handlers.services import list_services, category_services
+from handlers.admin import debug_categories
+from handlers.services import category_page_nav
 
 # Configuração de logs
 logging.basicConfig(
@@ -120,6 +122,7 @@ def main():
         app.add_handler(CallbackQueryHandler(affiliates.my_referrals, pattern="^aff_my_referrals$"))
         app.add_handler(CallbackQueryHandler(start.start_command, pattern="^back_to_start$"))
         app.add_handler(CallbackQueryHandler(balance.pix_command, pattern="^add_balance$"))
+        app.add_handler(CallbackQueryHandler(category_page_nav, pattern='^catpage_'))
         
         # Afiliados
 # ==================== AFILIADOS ====================

@@ -179,8 +179,10 @@ def get_service_by_id(service_id: str) -> Optional[Tuple]:
 # =========================================================
 # HANDLERS
 # =========================================================
-async def list_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Exibe o menu de categorias com identificador de provedor."""
+async def list_services(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 0):
+    """
+    Exibe o menu de categorias com paginação.
+    """
     query = update.callback_query
     if query:
         try:
@@ -196,17 +198,25 @@ async def list_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("⚠️ Nenhum serviço disponível. Tente mais tarde.")
         return ConversationHandler.END
 
-    # Inicializa o mapa de hashes no bot_data se não existir
+    # Configuração da paginação
+    ITEMS_PER_PAGE = 20  # 10 linhas de 2 categorias
+    total_pages = (len(categories) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
+    page = max(0, min(page, total_pages - 1))
+
+    start_idx = page * ITEMS_PER_PAGE
+    end_idx = min(start_idx + ITEMS_PER_PAGE, len(categories))
+    page_categories = categories[start_idx:end_idx]
+
+    # Inicializa o mapa de hashes no bot_data
     if 'cat_hash_map' not in context.bot_data:
         context.bot_data['cat_hash_map'] = {}
     cat_hash_map = context.bot_data['cat_hash_map']
 
-    # Padrão regex para extrair provedor do final: " [C2]"
     PROVIDER_PATTERN = re.compile(r'\s*\[C(\d+)\]\s*$')
 
     keyboard = []
-    for i in range(0, len(categories), 2):
-        display_name = categories[i]
+    for i in range(0, len(page_categories), 2):
+        display_name = page_categories[i]
 
         match = PROVIDER_PATTERN.search(display_name)
         if not match:
@@ -223,9 +233,9 @@ async def list_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cat_hash_map[callback_data1] = (real_cat, prov)
         row = [InlineKeyboardButton(display_name, callback_data=callback_data1)]
 
-        # Segunda categoria da linha (se existir)
-        if i + 1 < len(categories):
-            display_name2 = categories[i+1]
+        # Segunda categoria da linha
+        if i + 1 < len(page_categories):
+            display_name2 = page_categories[i+1]
 
             match2 = PROVIDER_PATTERN.search(display_name2)
             if not match2:
@@ -244,9 +254,22 @@ async def list_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         keyboard.append(row)
 
+    # Botões de navegação
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("« Anterior", callback_data=f"catpage_{page-1}"))
+    if page < total_pages - 1:
+        nav_buttons.append(InlineKeyboardButton("Próximo »", callback_data=f"catpage_{page+1}"))
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+
     keyboard.append([InlineKeyboardButton("🏠 Voltar ao Menu Principal", callback_data="back_to_start")])
     reply_markup = InlineKeyboardMarkup(keyboard)
-    text = "📦 **ESCOLHA UMA CATEGORIA:**"
+
+    text = f"📦 **ESCOLHA UMA CATEGORIA:**\n_(Página {page+1}/{total_pages})_"
+
+    # Armazena a página atual no user_data para possível retorno
+    context.user_data['current_category_page'] = page
 
     if query:
         await safe_edit(query, text, reply_markup)
@@ -292,6 +315,13 @@ async def category_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await safe_edit(query, text, reply_markup)
     return SELECTING_SERVICE
+
+async def category_page_nav(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Navegação entre páginas de categorias."""
+    query = update.callback_query
+    await query.answer()
+    page = int(query.data.split('_')[1])
+    return await list_services(update, context, page=page)
 
 async def receive_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Recebe a escolha de um serviço específico e mostra detalhes."""
@@ -435,11 +465,12 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def back_to_categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Retorna ao menu de categorias."""
+    """Retorna ao menu de categorias, lembrando a última página."""
     query = update.callback_query
     if query:
         await query.answer()
-        return await list_services(update, context)
+        page = context.user_data.get('current_category_page', 0)
+        return await list_services(update, context, page=page)
     return ConversationHandler.END
 
 async def cancel_to_services(update: Update, context: ContextTypes.DEFAULT_TYPE):

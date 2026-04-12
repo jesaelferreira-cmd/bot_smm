@@ -462,7 +462,7 @@ async def check_descriptions(update: Update, context: ContextTypes.DEFAULT_TYPE)
         msg = "❌ Nenhum serviço possui descrição no banco."
     await update.message.reply_text(msg, parse_mode="Markdown")
 
-sync def list_providers(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def list_providers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
     conn = sqlite3.connect(DB_PATH)
