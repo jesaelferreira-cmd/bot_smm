@@ -83,33 +83,29 @@ async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
 
-        # Verifica se a tabela orders existe
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='orders'")
         if not cursor.fetchone():
             text = "📭 **Você ainda não tem pedidos realizados.**"
         else:
-            # Verifica colunas existentes
             cursor.execute("PRAGMA table_info(orders)")
             columns = [col[1] for col in cursor.fetchall()]
 
-            # Campo de valor (centavos ou float)
             if 'amount_cents' in columns:
                 amount_field = "amount_cents"
             else:
                 amount_field = "amount * 100"
 
-            # Campo provider_id (se existir)
             if 'provider_id' in columns:
                 provider_field = "provider_id"
             else:
-                provider_field = "1"  # valor padrão
+                provider_field = "1"
 
             cursor.execute(f"""
                 SELECT order_id_api, service_name, {amount_field} as amount_cents,
                        date, status, {provider_field} as provider_id
                 FROM orders
                 WHERE user_id = ?
-                ORDER BY id DESC
+                ORDER BY rowid DESC
                 LIMIT 10
             """, (user_id,))
             orders_list = cursor.fetchall()
@@ -119,7 +115,7 @@ async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 text = "📋 **SEUS ÚLTIMOS PEDIDOS**\n\n"
                 for o in orders_list:
-                    order_id = o[0]
+                    order_id = o[0] if o[0] else "N/A"
                     service_name = o[1]
                     amount_cents = o[2]
                     amount_float = cents_to_float(amount_cents)
@@ -127,7 +123,6 @@ async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     status_str = o[4] if o[4] else "Pendente"
                     provider_id = o[5] if len(o) > 5 else 1
 
-                    # Emoji de status
                     if "Conclu" in status_str:
                         emoji = "✅"
                     elif "Cancel" in status_str or "Estorn" in status_str:
@@ -141,7 +136,6 @@ async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         f"💰 R$ {amount_float:.2f} | 📅 {date_str}\n\n"
                     )
 
-        # Envia/edita mensagem
         if query:
             if query.message.photo:
                 await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode="Markdown")
