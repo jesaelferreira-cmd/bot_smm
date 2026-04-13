@@ -97,23 +97,30 @@ def is_valid_category(category: str) -> bool:
     return True
 
 def get_categories() -> List[str]:
-    """
-    Retorna lista de strings formatadas: "Categoria Real [C{provider}]".
-    Exemplo: "Instagram [C1]", "Instagram [C2]".
-    """
     try:
         with sqlite3.connect(str(DB_PATH)) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT DISTINCT category, provider FROM services WHERE rate > 0")
             rows = cursor.fetchall()
         result = []
-        count_prov = {}
         for cat, prov in rows:
             if cat and len(cat.strip()) >= 2:
                 clean_cat = cat.strip()
-                result.append(f"{clean_cat} [C{prov}]")
-                count_prov[prov] = count_prov.get(prov, 0) + 1
-        logger.info(f"Categorias carregadas por provedor: {count_prov}")
+                # Tenta extrair plataforma do primeiro serviço dessa categoria
+                cursor.execute("SELECT name FROM services WHERE category = ? AND provider = ? LIMIT 1", (cat, prov))
+                serv = cursor.fetchone()
+                platform_hint = ""
+                if serv:
+                    name_lower = serv[0].lower()
+                    if "instagram" in name_lower: platform_hint = "📸"
+                    elif "tiktok" in name_lower: platform_hint = "🎵"
+                    elif "youtube" in name_lower: platform_hint = "▶️"
+                    elif "facebook" in name_lower: platform_hint = "👥"
+                    elif "kwai" in name_lower: platform_hint = "🎥"
+                    elif "telegram" in name_lower: platform_hint = "✈️"
+                    # Adicione outros mapeamentos
+                display = f"{platform_hint} {clean_cat} [C{prov}]".strip()
+                result.append(display)
         return result
     except Exception as e:
         logger.error(f"Erro em get_categories: {e}")
