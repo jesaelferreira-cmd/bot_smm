@@ -53,7 +53,7 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif provider_id == 2:
         api_url = SMM_API_URL_2
         api_key = SMM_API_KEY_2
-        service_field = 'service_id'      # ⚠️ ALTERE AQUI se o provedor 2 usar 'service_id' ou outro nome
+        service_field = 'service'      # ⚠️ ALTERE AQUI se o provedor 2 usar 'service_id' ou outro nome
     else:
         logger.error(f"Provedor desconhecido: {provider_id}")
         await message.reply_text("❌ Provedor desconhecido. Contate o suporte.")
