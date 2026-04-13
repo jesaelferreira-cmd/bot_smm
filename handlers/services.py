@@ -339,6 +339,7 @@ async def receive_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["rate"] = float(service[2])
     context.user_data["min"] = int(service[3])
     context.user_data["max"] = int(service[4])
+    context.user_data["provider_id"] = service[6]  # índice 6 = provider
     context.user_data["description"] = service[7] if len(service) > 7 else ""
 
     desc_text = context.user_data["description"]
