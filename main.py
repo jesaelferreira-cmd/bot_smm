@@ -138,7 +138,7 @@ def main():
         app.add_handler(CommandHandler("check_descriptions", admin.check_descriptions))
         app.add_handler(CommandHandler("list_providers", admin.list_providers))
         app.add_handler(CommandHandler("debug_cats", debug_categories))
-
+        app.add_handler(CommandHandler("saldo_api", status.check_provider_balance))
         # =========================================================
         # 3. CALLBACKS GERAIS (FORA DO CONVERSATION)
         # =========================================================
@@ -149,7 +149,7 @@ def main():
         app.add_handler(CallbackQueryHandler(affiliates.withdraw_to_bot, pattern="^aff_withdraw_bot$"))
         app.add_handler(CallbackQueryHandler(balance.pix_command, pattern="^add_balance$"))
         app.add_handler(CallbackQueryHandler(start.start_command, pattern="^back_to_start$"))
-
+        app.add_handler(CallbackQueryHandler(status.order_status_callback, pattern="^status_"))
         # =========================================================
         # 4. AFILIADOS - CONVERSATION HANDLER PARA SAQUE PIX
         # =========================================================
