@@ -103,51 +103,76 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"Resposta da API provedor {provider_id}: {response}")
 
         # 4. TRATAR RESPOSTA
-        if 'order' in response:
-            order_id_api = response['order']
-            data_atual = datetime.now().strftime("%d/%m/%Y %H:%M")
+	# 4. TRATAR RESPOSTA
+	if 'order' in response:
+	    order_id_api = response['order']
+	    data_atual = datetime.now().strftime("%d/%m/%Y %H:%M")
 
-            # Insere pedido no banco (compatível com ambas as estruturas)
-            cursor.execute("PRAGMA table_info(orders)")
-            columns = [col[1] for col in cursor.fetchall()]
-            if 'amount_cents' in columns:
-                cursor.execute("""
-                    INSERT INTO orders (user_id, service_name, quantity, amount_cents, order_id_api, status, date)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (user_id, user_data['service_name'], user_data['quantity'], total_price_cents, order_id_api, "Pendente", data_atual))
-            else:
-                cursor.execute("""
-                    INSERT INTO orders (user_id, service_name, quantity, amount, order_id_api, status, date)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (user_id, user_data['service_name'], user_data['quantity'], total_price_float, order_id_api, "Pendente", data_atual))
+	    # Verifica a estrutura atual da tabela orders
+	    cursor.execute("PRAGMA table_info(orders)")
+	    columns = [col[1] for col in cursor.fetchall()]
+	    has_amount_cents = 'amount_cents' in columns
+	    has_provider = 'provider_id' in columns
 
-            conn.commit()
-            logger.info(f"Pedido registrado no banco: order_id_api={order_id_api}")
+    # Campos base
+	    fields = ['user_id', 'service_name', 'quantity', 'order_id_api', 'status', 'date']
+	    values = [user_id, user_data['service_name'], user_data['quantity'], order_id_api, "Pendente", data_atual]
 
-            # Mensagem de sucesso
-            keyboard = [
-                [
-                    InlineKeyboardButton("📊 Status do Pedido", callback_data=f"status_{order_id_api}"),
-                    InlineKeyboardButton("📜 Meus Pedidos", callback_data="my_orders")
-                ],
-                [InlineKeyboardButton("🏠 Menu Inicial", callback_data="back_to_start")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
+    # Adiciona campo de valor (centavos ou float)
+	    if has_amount_cents:
+	        fields.append('amount_cents')
+	        values.append(total_price_cents)
+	    else:
+	        fields.append('amount')
+	        values.append(total_price_float
 
-            msg_sucesso = (
-                f"✅ **PEDIDO ENVIADO COM SUCESSO!**\n\n"
-                f"🆔 ID: `{order_id_api}`\n"
-                f"💰 Valor: R$ {total_price_float:.2f}\n"
-                f"📅 Data: {data_atual}\n\n"
-                f"Clique abaixo para acompanhar em tempo real:"
-            )
+    # Adiciona provider_id se a coluna existir
+	    if has_provider:
+	        fields.append('provider_id')
+	        values.append(provider_id)
 
-            if query:
-                await query.edit_message_text(msg_sucesso, reply_markup=reply_markup, parse_mode="Markdown")
-            else:
-                await message.reply_text(msg_sucesso, reply_markup=reply_markup, parse_mode="Markdown")
+	    placeholders = ', '.join(['?' for _ in fields])
+	    sql = f"INSERT INTO orders ({', '.join(fields)}) VALUES ({placeholders})"
 
-        else:
+	    logger.info(f"Inserindo pedido no banco: SQL={sql}, valores={values}")
+
+	    try:
+	        cursor.execute(sql, values)
+	        conn.commit()
+	        logger.info(f"✅ Pedido {order_id_api} inserido com sucesso. user_id={user_id}, provider_id={provider_id}")
+	    except Exception as insert_error:
+	        logger.error(f"❌ Falha ao inserir pedido {order_id_api}: {insert_error}")
+	        conn.rollback()
+        # Estorna o saldo debitado
+	        cursor.execute("UPDATE users SET main_balance_cents = main_balance_cents + ? WHERE user_id = ?", (total_price_cents, user_id))
+	        conn.commit()
+	        await message.reply_text("❌ Erro interno ao registrar pedido. Seu saldo foi estornado. Contate o suporte.")
+	        return ConversationHandler.END
+
+    # Mensagem de sucesso (continua normalmente)
+	    keyboard = [
+	        [
+	            InlineKeyboardButton("📊 Status do Pedido", callback_data=f"status_{order_id_api}"),
+	            InlineKeyboardButton("📜 Meus Pedidos", callback_data="my_orders")
+	        ],
+	        [InlineKeyboardButton("🏠 Menu Inicial", callback_data="back_to_start")]
+	    ]
+	    reply_markup = InlineKeyboardMarkup(keyboard)
+
+	    msg_sucesso = (
+	        f"✅ **PEDIDO ENVIADO COM SUCESSO!**\n\n"
+	        f"🆔 ID: `{order_id_api}`\n"
+	        f"💰 Valor: R$ {total_price_float:.2f}\n"
+	        f"📅 Data: {data_atual}\n\n"
+	        f"Clique abaixo para acompanhar em tempo real:"
+	    )
+
+	    if query:
+	        await query.edit_message_text(msg_sucesso, reply_markup=reply_markup, parse_mode="Markdown")
+	    else:
+	        await message.reply_text(msg_sucesso, reply_markup=reply_markup, parse_mode="Markdown")
+
+	        else:
             # Estornar saldo
             cursor.execute("""
                 UPDATE users
