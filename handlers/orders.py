@@ -49,11 +49,11 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if provider_id == 1:
         api_url = SMM_API_URL_1
         api_key = SMM_API_KEY_1
-        service_field = 'service'      # Campo padrão para provedor 1
+        service_field = 'service'
     elif provider_id == 2:
         api_url = SMM_API_URL_2
         api_key = SMM_API_KEY_2
-        service_field = 'service'      # ⚠️ ALTERE AQUI se o provedor 2 usar 'service_id' ou outro nome
+        service_field = 'service'
     else:
         logger.error(f"Provedor desconhecido: {provider_id}")
         await message.reply_text("❌ Provedor desconhecido. Contate o suporte.")
@@ -103,76 +103,75 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"Resposta da API provedor {provider_id}: {response}")
 
         # 4. TRATAR RESPOSTA
-	# 4. TRATAR RESPOSTA
-	if 'order' in response:
-	    order_id_api = response['order']
-	    data_atual = datetime.now().strftime("%d/%m/%Y %H:%M")
+        if 'order' in response:
+            order_id_api = response['order']
+            data_atual = datetime.now().strftime("%d/%m/%Y %H:%M")
 
-	    # Verifica a estrutura atual da tabela orders
-	    cursor.execute("PRAGMA table_info(orders)")
-	    columns = [col[1] for col in cursor.fetchall()]
-	    has_amount_cents = 'amount_cents' in columns
-	    has_provider = 'provider_id' in columns
+            # Verifica a estrutura atual da tabela orders
+            cursor.execute("PRAGMA table_info(orders)")
+            columns = [col[1] for col in cursor.fetchall()]
+            has_amount_cents = 'amount_cents' in columns
+            has_provider = 'provider_id' in columns
 
-    # Campos base
-	    fields = ['user_id', 'service_name', 'quantity', 'order_id_api', 'status', 'date']
-	    values = [user_id, user_data['service_name'], user_data['quantity'], order_id_api, "Pendente", data_atual]
+            # Campos base
+            fields = ['user_id', 'service_name', 'quantity', 'order_id_api', 'status', 'date']
+            values = [user_id, user_data['service_name'], user_data['quantity'], order_id_api, "Pendente", data_atual]
 
-    # Adiciona campo de valor (centavos ou float)
-	    if has_amount_cents:
-	        fields.append('amount_cents')
-	        values.append(total_price_cents)
-	    else:
-	        fields.append('amount')
-	        values.append(total_price_float
+            # Adiciona campo de valor (centavos ou float)
+            if has_amount_cents:
+                fields.append('amount_cents')
+                values.append(total_price_cents)
+            else:
+                fields.append('amount')
+                values.append(total_price_float)
 
-    # Adiciona provider_id se a coluna existir
-	    if has_provider:
-	        fields.append('provider_id')
-	        values.append(provider_id)
+            # Adiciona provider_id se a coluna existir
+            if has_provider:
+                fields.append('provider_id')
+                values.append(provider_id)
 
-	    placeholders = ', '.join(['?' for _ in fields])
-	    sql = f"INSERT INTO orders ({', '.join(fields)}) VALUES ({placeholders})"
+            placeholders = ', '.join(['?' for _ in fields])
+            sql = f"INSERT INTO orders ({', '.join(fields)}) VALUES ({placeholders})"
 
-	    logger.info(f"Inserindo pedido no banco: SQL={sql}, valores={values}")
+            logger.info(f"Inserindo pedido no banco: SQL={sql}, valores={values}")
 
-	    try:
-	        cursor.execute(sql, values)
-	        conn.commit()
-	        logger.info(f"✅ Pedido {order_id_api} inserido com sucesso. user_id={user_id}, provider_id={provider_id}")
-	    except Exception as insert_error:
-	        logger.error(f"❌ Falha ao inserir pedido {order_id_api}: {insert_error}")
-	        conn.rollback()
-        # Estorna o saldo debitado
-	        cursor.execute("UPDATE users SET main_balance_cents = main_balance_cents + ? WHERE user_id = ?", (total_price_cents, user_id))
-	        conn.commit()
-	        await message.reply_text("❌ Erro interno ao registrar pedido. Seu saldo foi estornado. Contate o suporte.")
-	        return ConversationHandler.END
+            try:
+                cursor.execute(sql, values)
+                conn.commit()
+                logger.info(f"✅ Pedido {order_id_api} inserido com sucesso. user_id={user_id}, provider_id={provider_id}")
+            except Exception as insert_error:
+                logger.error(f"❌ Falha ao inserir pedido {order_id_api}: {insert_error}")
+                conn.rollback()
+                # Estorna o saldo debitado
+                cursor.execute("UPDATE users SET main_balance_cents = main_balance_cents + ? WHERE user_id = ?", (total_price_cents, user_id))
+                conn.commit()
+                await message.reply_text("❌ Erro interno ao registrar pedido. Seu saldo foi estornado. Contate o suporte.")
+                return ConversationHandler.END
 
-    # Mensagem de sucesso (continua normalmente)
-	    keyboard = [
-	        [
-	            InlineKeyboardButton("📊 Status do Pedido", callback_data=f"status_{order_id_api}"),
-	            InlineKeyboardButton("📜 Meus Pedidos", callback_data="my_orders")
-	        ],
-	        [InlineKeyboardButton("🏠 Menu Inicial", callback_data="back_to_start")]
-	    ]
-	    reply_markup = InlineKeyboardMarkup(keyboard)
+            # Mensagem de sucesso
+            keyboard = [
+                [
+                    InlineKeyboardButton("📊 Status do Pedido", callback_data=f"status_{order_id_api}"),
+                    InlineKeyboardButton("📜 Meus Pedidos", callback_data="my_orders")
+                ],
+                [InlineKeyboardButton("🏠 Menu Inicial", callback_data="back_to_start")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
 
-	    msg_sucesso = (
-	        f"✅ **PEDIDO ENVIADO COM SUCESSO!**\n\n"
-	        f"🆔 ID: `{order_id_api}`\n"
-	        f"💰 Valor: R$ {total_price_float:.2f}\n"
-	        f"📅 Data: {data_atual}\n\n"
-	        f"Clique abaixo para acompanhar em tempo real:"
-	    )
+            msg_sucesso = (
+                f"✅ **PEDIDO ENVIADO COM SUCESSO!**\n\n"
+                f"🆔 ID: `{order_id_api}`\n"
+                f"💰 Valor: R$ {total_price_float:.2f}\n"
+                f"📅 Data: {data_atual}\n\n"
+                f"Clique abaixo para acompanhar em tempo real:"
+            )
 
-	    if query:
-	        await query.edit_message_text(msg_sucesso, reply_markup=reply_markup, parse_mode="Markdown")
-	    else:
-	        await message.reply_text(msg_sucesso, reply_markup=reply_markup, parse_mode="Markdown")
+            if query:
+                await query.edit_message_text(msg_sucesso, reply_markup=reply_markup, parse_mode="Markdown")
+            else:
+                await message.reply_text(msg_sucesso, reply_markup=reply_markup, parse_mode="Markdown")
 
-	        else:
+        else:
             # Estornar saldo
             cursor.execute("""
                 UPDATE users
