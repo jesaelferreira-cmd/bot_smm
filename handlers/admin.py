@@ -517,3 +517,33 @@ async def debug_categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += "❌ **Nenhuma categoria do Fornecedor 2 foi retornada!**"
 
     await update.message.reply_text(msg, parse_mode="Markdown")
+
+@dp.message_handler(commands=['corrigir_pedido'])
+async def fix_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    # Uso: /corrigir_pedido user_id order_id_api amount_float provider_id service_name quantity
+    args = context.args
+    if len(args) < 6:
+        await update.message.reply_text("Uso: /corrigir_pedido user_id order_id_api amount provider_id service_name quantity")
+        return
+    user_id = int(args[0])
+    order_id_api = int(args[1])
+    amount_float = float(args[2])
+    provider_id = int(args[3])
+    service_name = ' '.join(args[4:-1])
+    quantity = int(args[-1])
+
+    amount_cents = int(amount_float * 100)
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    # Insere pedido
+    cursor.execute("""
+        INSERT INTO orders (user_id, service_name, quantity, amount_cents, order_id_api, status, date, provider_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (user_id, service_name, quantity, amount_cents, order_id_api, "Pendente", datetime.now().strftime("%d/%m/%Y %H:%M"), provider_id))
+    # Debita saldo (se ainda não debitado)
+    cursor.execute("UPDATE users SET main_balance_cents = main_balance_cents - ? WHERE user_id = ?", (amount_cents, user_id))
+    conn.commit()
+    conn.close()
+    await update.message.reply_text(f"✅ Pedido {order_id_api} corrigido. Saldo debitado.")
