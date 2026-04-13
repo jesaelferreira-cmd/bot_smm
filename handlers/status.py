@@ -18,10 +18,24 @@ def get_order_from_db(order_id: str, user_id: int = None):
     """Busca pedido no banco com informações completas."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    query = """
+
+    # Verifica colunas
+    cursor.execute("PRAGMA table_info(orders)")
+    columns = [col[1] for col in cursor.fetchall()]
+    if 'provider_id' in columns:
+        provider_field = "o.provider_id"
+    else:
+        provider_field = "1"
+
+    if 'amount_cents' in columns:
+        amount_field = "o.amount_cents"
+    else:
+        amount_field = "o.amount * 100"
+
+    query = f"""
         SELECT o.order_id_api, o.service_name, o.quantity,
-               COALESCE(o.amount_cents, o.amount*100) as amount_cents,
-               o.status, o.date, o.provider_id
+               {amount_field} as amount_cents,
+               o.status, o.date, {provider_field} as provider_id
         FROM orders o
         WHERE o.order_id_api = ?
     """
@@ -74,17 +88,25 @@ async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not cursor.fetchone():
             text = "📭 **Você ainda não tem pedidos realizados.**"
         else:
-            # Seleciona colunas dinamicamente (compatível com amount_cents ou amount)
+            # Verifica colunas existentes
             cursor.execute("PRAGMA table_info(orders)")
             columns = [col[1] for col in cursor.fetchall()]
+
+            # Campo de valor (centavos ou float)
             if 'amount_cents' in columns:
                 amount_field = "amount_cents"
             else:
                 amount_field = "amount * 100"
 
+            # Campo provider_id (se existir)
+            if 'provider_id' in columns:
+                provider_field = "provider_id"
+            else:
+                provider_field = "1"  # valor padrão
+
             cursor.execute(f"""
                 SELECT order_id_api, service_name, {amount_field} as amount_cents,
-                       date, status, COALESCE(provider_id, 1) as provider_id
+                       date, status, {provider_field} as provider_id
                 FROM orders
                 WHERE user_id = ?
                 ORDER BY id DESC
