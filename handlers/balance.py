@@ -34,9 +34,6 @@ async def safe_edit(query, text: str, reply_markup=None, parse_mode="Markdown"):
 def cents_to_float(cents: int) -> float:
     return round(cents / 100.0, 2)
 
-# ------------------------------------------------------------
-# FUNÇÃO AUXILIAR: converte float (ex: 12.34) para centavos (int)
-# ------------------------------------------------------------
 def float_to_cents(value: float) -> int:
     return int(Decimal(str(value)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP) * 100)
 
@@ -58,15 +55,13 @@ async def show_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
 
         cursor.execute("SELECT main_balance_cents FROM users WHERE user_id = ?", (user_id,))
-        row = cursor.fetchone()
-        balance_cents = row[0] if row and row[0] is not None else 0
-
-        balance_real = cents_to_float(balance_cents)
+        result = cursor.fetchone()
+        balance = (result[0] if result else 0) / 100.0
 
         await update.message.reply_text(
             f"💰 **SEU PAINEL FINANCEIRO**\n\n"
             f"👤 Usuário: `{user_id}`\n"
-            f"💵 Saldo Disponível: **R$ {balance_real:.2f}**\n\n"
+            f"💵 Saldo Disponível: **R$ {balance:.2f}**\n\n"
             f"🚀 _Precisa de mais? Use `/pix valor` para recarregar._",
             parse_mode="Markdown"
         )
@@ -111,21 +106,29 @@ async def pix_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # --- CASO 2: com argumento → processa o valor ---
+    raw_amount = context.args[0].replace(',', '.')
+    if not re.match(r'^\d+(\.\d{1,2})?$', raw_amount):
+        await target.reply_text("❌ **Formato inválido!** Use apenas números (ex: 50 ou 50.00)")
+        return
+
     try:
-        raw_amount = context.args[0].replace(',', '.')
         amount_float = float(raw_amount)
         if amount_float < 5.00 or amount_float > 1000.00:
             await target.reply_text("⚠️ **Valor fora do limite!**\nO PIX deve ser entre R$ 5,00 e R$ 1.000,00.")
             return
-        # Converte para centavos (inteiro) para evitar problemas de ponto flutuante
         amount_cents = float_to_cents(amount_float)
         amount_display = amount_cents / 100.0
-    except (ValueError, IndexError):
+    except ValueError:
         await target.reply_text("❌ **Valor Inválido!** Use números (ex: `/pix 50.50`).")
         return
 
     # --- FLOOD PROTECTION (evita spam de geração de PIX) ---
     now = datetime.now()
+    # Limpeza periódica de locks antigos (mais de 1 hora)
+    for uid in list(user_locks.keys()):
+        if (now - user_locks[uid]).total_seconds() > 3600:
+            del user_locks[uid]
+
     if user_id in user_locks:
         diff = (now - user_locks[user_id]).total_seconds()
         if diff < 10:
@@ -137,8 +140,6 @@ async def pix_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_msg = await target.reply_text("⏳ Gerando seu código PIX... Aguarde.")
     try:
         await target.reply_chat_action("typing")
-
-        # A API do MP recebe o valor em reais (float) mesmo, mas usamos o valor original
         payment = create_pix_payment(amount_display, user_id)
 
         if payment and "qrcode" in payment:
@@ -155,12 +156,11 @@ async def pix_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             await status_msg.delete()
             await target.reply_text(msg, parse_mode="Markdown")
-
-            # Inicia verificação em segundo plano (passa amount_cents para não depender de float)
             asyncio.create_task(check_payment_loop(context, user_id, pix_id, amount_cents))
         else:
+            error_detail = payment.get("message", "sem detalhes") if payment else "resposta vazia"
+            logger.error(f"API MP falhou para o usuário {user_id}: {error_detail}")
             await status_msg.edit_text("❌ Não foi possível gerar o PIX no Mercado Pago agora. Tente mais tarde.")
-            logger.error(f"API MP falhou para o usuário {user_id}")
 
     except Exception as e:
         logger.critical(f"Erro fatal no processo de PIX: {e}")
@@ -184,11 +184,9 @@ async def check_payment_loop(context: ContextTypes.DEFAULT_TYPE, user_id: int, p
             status = res["response"].get("status")
 
             if status == "approved":
-                # ---- CRÉDITO SEGURO (transação atômica) ----
                 conn = sqlite3.connect(DB_PATH, timeout=15)
                 cursor = conn.cursor()
                 try:
-                    # Usamos uma transação explícita e verificamos se o usuário existe
                     cursor.execute("SELECT 1 FROM users WHERE user_id = ?", (user_id,))
                     if not cursor.fetchone():
                         cursor.execute(
@@ -197,7 +195,6 @@ async def check_payment_loop(context: ContextTypes.DEFAULT_TYPE, user_id: int, p
                         )
                         conn.commit()
 
-                    # Atualiza o saldo em centavos (sem usar float)
                     cursor.execute("""
                         UPDATE users
                         SET main_balance_cents = main_balance_cents + ?
@@ -208,7 +205,6 @@ async def check_payment_loop(context: ContextTypes.DEFAULT_TYPE, user_id: int, p
                         conn.commit()
                         logger.info(f"💰 Crédito de {amount_display:.2f} (centavos: {amount_cents}) para usuário {user_id}")
 
-                        # Botões de navegação
                         keyboard = [
                             [
                                 InlineKeyboardButton("🛒 Ir para a Loja", callback_data="back_to_categories"),
@@ -234,7 +230,7 @@ async def check_payment_loop(context: ContextTypes.DEFAULT_TYPE, user_id: int, p
                     conn.rollback()
                 finally:
                     conn.close()
-                return  # Sai do loop após sucesso
+                return
 
             elif status in ["cancelled", "rejected"]:
                 logger.info(f"Pagamento {pix_id} cancelado/rejeitado para usuário {user_id}")
@@ -242,6 +238,8 @@ async def check_payment_loop(context: ContextTypes.DEFAULT_TYPE, user_id: int, p
 
         except Exception as e:
             logger.error(f"Erro no loop de verificação (tentativa {attempt+1}): {e}")
-            await asyncio.sleep(10)  # Pausa extra em caso de falha de rede
+            await asyncio.sleep(10)
 
     logger.info(f"⏰ Loop expirado para PIX {pix_id} (usuário {user_id}) - não confirmado em 20min")
+
+

@@ -47,7 +47,7 @@ from handlers.services import (
     ASKING_LINK,
     CONFIRMING
 )
-from handlers.admin import debug_categories
+from handlers.admin import debug_categories, fix_order
 
 # Configuração de logs
 logging.basicConfig(
@@ -139,6 +139,7 @@ def main():
         app.add_handler(CommandHandler("list_providers", admin.list_providers))
         app.add_handler(CommandHandler("debug_cats", debug_categories))
         app.add_handler(CommandHandler("saldo_api", status.check_provider_balance))
+        app.add_handler(CommandHandler("corrigir_pedido", fix_order))
         # =========================================================
         # 3. CALLBACKS GERAIS (FORA DO CONVERSATION)
         # =========================================================

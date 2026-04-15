@@ -106,9 +106,11 @@ def get_categories() -> List[str]:
         for cat, prov in rows:
             if cat and len(cat.strip()) >= 2:
                 clean_cat = cat.strip()
-                # Tenta extrair plataforma do primeiro serviço dessa categoria
-                cursor.execute("SELECT name FROM services WHERE category = ? AND provider = ? LIMIT 1", (cat, prov))
-                serv = cursor.fetchone()
+                # Busca plataforma em uma nova conexão (ou use a mesma, mas não reexecute com o mesmo cursor ativo)
+                with sqlite3.connect(str(DB_PATH)) as conn2:
+                    cur2 = conn2.cursor()
+                    cur2.execute("SELECT name FROM services WHERE category = ? AND provider = ? LIMIT 1", (cat, prov))
+                    serv = cur2.fetchone()
                 platform_hint = ""
                 if serv:
                     name_lower = serv[0].lower()
@@ -118,7 +120,6 @@ def get_categories() -> List[str]:
                     elif "facebook" in name_lower: platform_hint = "👥"
                     elif "kwai" in name_lower: platform_hint = "🎥"
                     elif "telegram" in name_lower: platform_hint = "✈️"
-                    # Adicione outros mapeamentos
                 display = f"{platform_hint} {clean_cat} [C{prov}]".strip()
                 result.append(display)
         return result
@@ -151,25 +152,59 @@ def get_services(category_name: str, limit: int = 15) -> List[Tuple]:
 def get_services_by_category_and_provider(category_name: str, provider: int, limit: int = 15) -> List[Tuple]:
     """
     Busca serviços de uma categoria específica de UM provedor.
+    Realiza correspondência flexível (case-insensitive, ignora emojis e espaços).
     """
     try:
         with sqlite3.connect(str(DB_PATH)) as conn:
             cursor = conn.cursor()
+
+            # Função para normalizar texto (remove emojis, símbolos, espaços extras)
+            def normalize_for_match(text: str) -> str:
+                # Remove caracteres não ASCII (emojis, símbolos)
+                text = re.sub(r'[^\x00-\x7F]+', '', text)
+                # Remove pontuação e mantém apenas letras, números e espaços
+                text = re.sub(r'[^\w\s]', '', text)
+                # Normaliza espaços e converte para minúsculas
+                return ' '.join(text.lower().split())
+
+            clean_input = normalize_for_match(category_name)
+
+            # Obtém todas as categorias distintas do provedor
+            cursor.execute("""
+                SELECT DISTINCT category FROM services
+                WHERE provider = ? AND rate > 0
+            """, (provider,))
+            all_categories = [row[0] for row in cursor.fetchall()]
+
+            # Encontra a categoria que melhor corresponde
+            matched_category = None
+            for cat in all_categories:
+                if normalize_for_match(cat) == clean_input:
+                    matched_category = cat
+                    break
+
+            if not matched_category:
+                logger.warning(f"Nenhuma correspondência para categoria '{category_name}' no provedor {provider}")
+                return []
+
+            # Busca os serviços com o nome exato da categoria encontrada
             cursor.execute("""
                 SELECT service_id, name, rate, min, max
                 FROM services
                 WHERE category = ? AND provider = ? AND rate > 0
                 ORDER BY rate ASC
                 LIMIT ?
-            """, (category_name, provider, limit))
+            """, (matched_category, provider, limit))
             services = cursor.fetchall()
-        logger.info(f"Serviços encontrados para '{category_name}' (C{provider}): {len(services)}")
+
+        logger.info(f"Serviços encontrados para '{matched_category}' (C{provider}): {len(services)}")
         return services
     except Exception as e:
         logger.error(f"Erro ao buscar serviços para {category_name} C{provider}: {e}")
         return []
 
-def get_service_by_id(service_id: str) -> Optional[Tuple]:
+def get_service_by_id(service_id: str):
+    """Retorna os dados completos de um serviço pelo ID (todos os provedores)."""
     try:
         with sqlite3.connect(str(DB_PATH)) as conn:
             cursor = conn.cursor()

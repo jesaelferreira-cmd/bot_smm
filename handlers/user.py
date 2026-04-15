@@ -16,18 +16,19 @@ async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # 1. Buscar dados no banco
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        
-        # Puxa Saldo
-        cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+
+        # Puxa Saldo (AGORA USA main_balance_cents)
+        cursor.execute("SELECT main_balance_cents FROM users WHERE user_id = ?", (user_id,))
         result = cursor.fetchone()
-        balance = result[0] if result else 0.0
-        
+        balance_cents = result[0] if result else 0
+        balance = balance_cents / 100.0
+
         # Puxa Total de Pedidos Realizados
         cursor.execute("SELECT COUNT(*) FROM orders WHERE user_id = ?", (user_id,))
         total_pedidos = cursor.fetchone()[0]
         conn.close()
 
-        # 2. Montar o Texto do Perfil (Estilo Profissional)
+        # 2. Montar o Texto do Perfil
         texto_perfil = (
             f"👤 **MEU PERFIL - LIKESPLUS**\n"
             f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n\n"
@@ -46,7 +47,7 @@ async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        # 4. Envio (Deleta o menu anterior com foto e manda o perfil limpo)
+        # 4. Envio
         if query:
             await query.message.delete()
             await context.bot.send_message(
@@ -61,4 +62,3 @@ async def show_profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         print(f"Erro ao carregar perfil: {e}")
         await context.bot.send_message(chat_id=user_id, text="⚠️ Erro ao carregar seu perfil.")
-

@@ -63,6 +63,7 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cursor = conn.cursor()
 
     try:
+        # ========== TRANSAÇÃO ÚNICA: DÉBITO + API + INSERÇÃO ==========
         # 1. DEBITAR SALDO (com verificação de saldo suficiente)
         cursor.execute("""
             UPDATE users
@@ -71,6 +72,7 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """, (total_price_cents, user_id, total_price_cents))
 
         if cursor.rowcount == 0:
+            # Saldo insuficiente
             keyboard = [[InlineKeyboardButton("💳 Adicionar Saldo (PIX)", callback_data="add_balance")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await message.reply_text(
@@ -83,10 +85,7 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
             conn.close()
             return ConversationHandler.END
 
-        conn.commit()
-        logger.info(f"Saldo debitado: user={user_id}, valor={total_price_cents} centavos")
-
-        # 2. MONTAR PAYLOAD DINAMICAMENTE
+        # 2. MONTAR PAYLOAD E CHAMAR API (ainda sem commit)
         payload = {
             'key': api_key,
             'action': 'add',
@@ -94,30 +93,26 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'link': user_data['link'],
             'quantity': user_data['quantity']
         }
-
         logger.info(f"Enviando pedido para provedor {provider_id}: URL={api_url}, payload={payload}")
 
-        # 3. CHAMADA À API
         res = requests.post(api_url, data=payload, timeout=20)
         response = res.json()
         logger.info(f"Resposta da API provedor {provider_id}: {response}")
 
-        # 4. TRATAR RESPOSTA
+        # 3. TRATAR RESPOSTA
         if 'order' in response:
             order_id_api = response['order']
             data_atual = datetime.now().strftime("%d/%m/%Y %H:%M")
 
-            # Verifica a estrutura atual da tabela orders
+            # Verifica estrutura da tabela orders
             cursor.execute("PRAGMA table_info(orders)")
             columns = [col[1] for col in cursor.fetchall()]
             has_amount_cents = 'amount_cents' in columns
             has_provider = 'provider_id' in columns
 
-            # Campos base
             fields = ['user_id', 'service_name', 'quantity', 'order_id_api', 'status', 'date']
             values = [user_id, user_data['service_name'], user_data['quantity'], order_id_api, "Pendente", data_atual]
 
-            # Adiciona campo de valor (centavos ou float)
             if has_amount_cents:
                 fields.append('amount_cents')
                 values.append(total_price_cents)
@@ -125,28 +120,18 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 fields.append('amount')
                 values.append(total_price_float)
 
-            # Adiciona provider_id se a coluna existir
             if has_provider:
                 fields.append('provider_id')
                 values.append(provider_id)
 
             placeholders = ', '.join(['?' for _ in fields])
             sql = f"INSERT INTO orders ({', '.join(fields)}) VALUES ({placeholders})"
+            logger.info(f"Inserindo pedido: {sql} com valores {values}")
 
-            logger.info(f"Inserindo pedido no banco: SQL={sql}, valores={values}")
+            cursor.execute(sql, values)
+            conn.commit()  # <-- COMMIT ÚNICO (débito + inserção)
 
-            try:
-                cursor.execute(sql, values)
-                conn.commit()
-                logger.info(f"✅ Pedido {order_id_api} inserido com sucesso. user_id={user_id}, provider_id={provider_id}")
-            except Exception as insert_error:
-                logger.error(f"❌ Falha ao inserir pedido {order_id_api}: {insert_error}")
-                conn.rollback()
-                # Estorna o saldo debitado
-                cursor.execute("UPDATE users SET main_balance_cents = main_balance_cents + ? WHERE user_id = ?", (total_price_cents, user_id))
-                conn.commit()
-                await message.reply_text("❌ Erro interno ao registrar pedido. Seu saldo foi estornado. Contate o suporte.")
-                return ConversationHandler.END
+            logger.info(f"✅ Pedido {order_id_api} salvo e saldo debitado. user_id={user_id}")
 
             # Mensagem de sucesso
             keyboard = [
@@ -157,7 +142,6 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("🏠 Menu Inicial", callback_data="back_to_start")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
-
             msg_sucesso = (
                 f"✅ **PEDIDO ENVIADO COM SUCESSO!**\n\n"
                 f"🆔 ID: `{order_id_api}`\n"
@@ -165,29 +149,23 @@ async def confirm_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📅 Data: {data_atual}\n\n"
                 f"Clique abaixo para acompanhar em tempo real:"
             )
-
             if query:
                 await query.edit_message_text(msg_sucesso, reply_markup=reply_markup, parse_mode="Markdown")
             else:
                 await message.reply_text(msg_sucesso, reply_markup=reply_markup, parse_mode="Markdown")
 
         else:
-            # Estornar saldo
-            cursor.execute("""
-                UPDATE users
-                SET main_balance_cents = main_balance_cents + ?
-                WHERE user_id = ?
-            """, (total_price_cents, user_id))
-            conn.commit()
-
+            # API retornou erro: estornar saldo (rollback)
+            conn.rollback()
             error_msg = response.get('error', 'Erro desconhecido')
             logger.error(f"Erro da API provedor {provider_id}: {error_msg}")
-            await message.reply_text(f"❌ Erro no provedor: {error_msg}\nSeu saldo foi estornado.")
+            await message.reply_text(f"❌ Erro no provedor: {error_msg}\nSeu saldo NÃO foi debitado.")
 
     except Exception as e:
+        # Qualquer exceção (rede, timeout, etc): rollback geral
         conn.rollback()
-        logger.error(f"❌ ERRO NO PEDIDO: {e}")
-        await message.reply_text("⚠️ Erro interno ao processar. Tente novamente.")
+        logger.error(f"❌ ERRO NO PEDIDO (transação revertida): {e}")
+        await message.reply_text("⚠️ Erro interno ao processar. Seu saldo NÃO foi debitado. Tente novamente.")
     finally:
         conn.close()
 

@@ -122,7 +122,7 @@ async def show_affiliates(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "💰 **Ganhe saldo GRÁTIS indicando seus amigos!** 💰\n\n"
         "• Ser afiliado é a melhor forma de ganhar saldo sem custo.\n"
         "• Você recebe **10% de cada recarga** do seu indicado.\n"
-        "• **Saques via PIX** (mínimo R$30) ou **resgate para saldo do bot** (mínimo R$1).\n"
+        "• **Saques via PIX** (mínimo R$30) ou **resgate para saldo do bot** (mínimo R$5).\n"
         "• Ganhos ilimitados! 🚀\n\n"
         f"👥 **Indicados ativos:** `{total_refs}`\n"
         f"💰 **Saldo de Comissão disponível:** `R$ {balance_str:.2f}`\n"
@@ -234,8 +234,8 @@ async def withdraw_to_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
         res = cursor.fetchone()
         balance_cents = res[0] if res else 0
 
-        if balance_cents < 100:
-            await query.message.reply_text(f"❌ Saldo insuficiente. Mínimo: R$ 1,00. Você tem R$ {cents_to_float(balance_cents):.2f}")
+        if balance_cents < 500:
+            await query.message.reply_text(f"❌ Saldo insuficiente. Mínimo: R$ 5,00. Você tem R$ {cents_to_float(balance_cents):.2f}")
             return
 
         cursor.execute(

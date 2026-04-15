@@ -75,10 +75,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "VALUES (?, ?, ?, 0.0, 0, 0)",
         (user_id, user.first_name, user.username)
     )
-    cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
+    cursor.execute("SELECT main_balance_cents FROM users WHERE user_id = ?", (user_id,))
     result = cursor.fetchone()
-    balance = result[0] if result else 0.0
-
+    balance_cents = result[0] if result else 0
+    balance = balance_cents / 100.0
     # Conta quantos pedidos ele já fez
     cursor.execute("SELECT COUNT(*) FROM orders WHERE user_id = ?", (user_id,))
     compras_count = cursor.fetchone()[0]

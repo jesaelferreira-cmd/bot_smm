@@ -4,14 +4,18 @@ import sqlite3
 import requests
 import os
 import sys
+import re
 from pathlib import Path
 from dotenv import load_dotenv
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 
 load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "database" / "bot_smm.db"
 
+# ------------------------------------------------------------
+# FUNÇÕES DE IMPRESSÃO
+# ------------------------------------------------------------
 def print_section(title: str):
     print("\n" + "=" * 60)
     print(f" {title}")
@@ -29,6 +33,101 @@ def print_warning(msg: str):
 def print_info(msg: str):
     print(f"📌 {msg}")
 
+# ------------------------------------------------------------
+# MAPEAMENTO DE PLATAFORMAS (prioridade pela primeira ocorrência)
+# ------------------------------------------------------------
+PLATFORM_KEYWORDS: List[Tuple[str, str]] = [
+    ("instagram", "Instagram"),
+    ("tiktok", "TikTok"),
+    ("youtube", "YouTube"),
+    ("facebook", "Facebook"),
+    ("kwai", "Kwai"),
+    ("telegram", "Telegram"),
+    ("twitter", "X/Twitter"),
+    ("x", "X/Twitter"),
+    ("whatsapp", "WhatsApp"),
+    ("spotify", "Spotify"),
+    ("twitch", "Twitch"),
+    ("pinterest", "Pinterest"),
+    ("linkedin", "LinkedIn"),
+    ("reddit", "Reddit"),
+    ("bluesky", "BlueSky"),
+    ("threads", "Threads"),
+    ("snackvideo", "SnackVideo"),
+    ("tidal", "Tidal"),
+    ("dribbble", "Dribbble"),
+    ("rumble", "Rumble"),
+    ("coinmarketcap", "CoinMarketCap"),
+    ("google", "Google"),
+    ("site", "Site"),
+    ("denuncia", "Denúncias"),
+    ("tráfego", "Tráfego"),
+    ("trafego", "Tráfego"),
+    ("kick", "Kick"),
+    ("binance", "Binance"),
+    ("deezer", "Deezer"),
+    ("discord", "Discord"),
+    ("snapchat", "Snapchat"),
+    ("soundcloud", "SoundCloud"),
+    ("topick", "Topick"),
+    ("trovo", "Trovo"),
+    ("freefire", "FreeFire"),
+]
+
+def detect_platform(service_name: str) -> str:
+    """Retorna a plataforma mais provável baseada no nome do serviço."""
+    name_lower = service_name.lower()
+    best_match = "Outros"
+    best_index = len(name_lower)
+    for keyword, platform in PLATFORM_KEYWORDS:
+        idx = name_lower.find(keyword)
+        if idx != -1 and idx < best_index:
+            best_match = platform
+            best_index = idx
+    return best_match
+
+def clean_text(text: str) -> str:
+    """Remove emojis, símbolos especiais e normaliza espaços."""
+    if not text:
+        return ""
+    # Remove caracteres não ASCII (inclui emojis) - opcional, mas útil
+    text = re.sub(r'[^\x00-\x7F]+', '', text)
+    # Remove pontuação e setas
+    text = re.sub(r'[➡→⭐🌟✨💫🔥]', '', text)
+    text = re.sub(r'[^\w\s-]', '', text)
+    # Normaliza espaços
+    text = ' '.join(text.split())
+    return text.strip()
+
+def normalize_category(raw_category: str, platform: str) -> str:
+    """Cria uma categoria padronizada no formato 'Plataforma - Tipo'."""
+    # Limpa a string
+    clean = clean_text(raw_category)
+    if not clean:
+        clean = "Geral"
+
+    # Remove prefixo da plataforma se já existir
+    lower_clean = clean.lower()
+    lower_platform = platform.lower()
+    if lower_clean.startswith(lower_platform):
+        clean = clean[len(platform):].strip()
+        if clean.startswith('-'):
+            clean = clean[1:].strip()
+
+    # Remove palavras redundantes
+    redundant = ["serviços para", "serviços de", "serviço de", "serviço para", "serviços"]
+    for word in redundant:
+        clean = re.sub(rf'\b{word}\b', '', clean, flags=re.IGNORECASE)
+    clean = ' '.join(clean.split())
+
+    if not clean:
+        clean = "Geral"
+
+    return f"{platform} - {clean}"
+
+# ------------------------------------------------------------
+# BANCO DE DADOS
+# ------------------------------------------------------------
 def ensure_services_table(cursor):
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS services (
@@ -51,7 +150,6 @@ def ensure_services_table(cursor):
 
 def migrate_users_table(cursor):
     print_section("MIGRAÇÃO DA TABELA USERS")
-    print_info("Verificando estrutura...")
     cursor.execute("PRAGMA table_info(users)")
     columns = [col[1] for col in cursor.fetchall()]
     if 'affiliate_balance_cents' not in columns:
@@ -93,7 +191,6 @@ def extract_field(service: Dict, field_names: List[str], default=None):
     return default
 
 def extract_description(service: Dict, name: str, category: str) -> str:
-    """Extrai descrição ou cria uma descrição padrão."""
     desc = extract_field(service, ['description', 'desc', 'Description', 'Desc', 'details', 'note', 'observacao'])
     if desc and isinstance(desc, str) and desc.strip():
         return desc.strip()
@@ -102,8 +199,8 @@ def extract_description(service: Dict, name: str, category: str) -> str:
 def update_services(cursor):
     print_section("ATUALIZAÇÃO DE SERVIÇOS")
     ensure_services_table(cursor)
-    
-    # Buscar margem e promo
+
+    # Margem e promo
     cursor.execute("SELECT value FROM settings WHERE key='margem'")
     row = cursor.fetchone()
     margem = float(row[0]) if row else 1.0
@@ -111,7 +208,7 @@ def update_services(cursor):
     row = cursor.fetchone()
     promo = float(row[0]) if row else 0.0
     print_info(f"Margem: {margem}x | Promo: {promo*100}%")
-    
+
     cursor.execute("DELETE FROM services")
     fornecedores = [
         (1, os.getenv("SMM_API_URL_1"), os.getenv("SMM_API_KEY_1")),
@@ -132,18 +229,25 @@ def update_services(cursor):
                 rate_str = extract_field(s, ['rate', 'price'])
                 min_q = extract_field(s, ['min', 'min_amount'], 0)
                 max_q = extract_field(s, ['max', 'max_amount'], 999999)
-                cat = extract_field(s, ['category', 'categoria'], 'Outros')
+                raw_cat = extract_field(s, ['category', 'categoria'], 'Outros')
+
                 if not sid or not name:
                     continue
                 rate = float(rate_str) if rate_str else 0.0
                 if rate <= 0:
                     continue
+
+                # NOVA LÓGICA DE CATEGORIZAÇÃO
+                platform = detect_platform(name)
+                cat = normalize_category(raw_cat, platform)
+
                 price = round((rate * margem) * (1 - promo), 2)
                 min_q = int(min_q) if min_q else 0
                 max_q = int(max_q) if max_q else 999999
                 description = extract_description(s, name, cat)
                 if description and "descrição padrão" not in description.lower():
                     desc_count += 1
+
                 cursor.execute("""
                     INSERT OR REPLACE INTO services
                     (service_id, name, rate, min, max, category, provider, description)
