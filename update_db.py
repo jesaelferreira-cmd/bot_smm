@@ -200,7 +200,7 @@ def update_services(cursor):
     print_section("ATUALIZAÇÃO DE SERVIÇOS")
     ensure_services_table(cursor)
 
-    # Margem e promo
+    # Buscar margem e promo
     cursor.execute("SELECT value FROM settings WHERE key='margem'")
     row = cursor.fetchone()
     margem = float(row[0]) if row else 1.0
@@ -209,25 +209,24 @@ def update_services(cursor):
     promo = float(row[0]) if row else 0.0
     print_info(f"Margem: {margem}x | Promo: {promo*100}%")
 
+    # Limpa a tabela de serviços (apaga todos)
     cursor.execute("DELETE FROM services")
-# Monta lista de fornecedores ativos (apenas com URL e chave preenchidas)
-fornecedores = []
-url1 = os.getenv("SMM_API_URL_1")
-key1 = os.getenv("SMM_API_KEY_1")
-if url1 and key1:
-    fornecedores.append((1, url1, key1))
 
-url2 = os.getenv("SMM_API_URL_2")
-key2 = os.getenv("SMM_API_KEY_2")
-if url2 and key2:
-    fornecedores.append((2, url2, key2))
+    # Monta lista de fornecedores ativos (apenas com URL e chave preenchidas)
+    fornecedores = []
+    url1 = os.getenv("SMM_API_URL_1")
+    key1 = os.getenv("SMM_API_KEY_1")
+    if url1 and key1:
+        fornecedores.append((1, url1, key1))
 
-total = 0
-desc_count = 0
-for prov_id, url, key in fornecedores:
-    # o restante do loop continua normalmente...
-        if not url or not key:
-            continue
+    url2 = os.getenv("SMM_API_URL_2")
+    key2 = os.getenv("SMM_API_KEY_2")
+    if url2 and key2:
+        fornecedores.append((2, url2, key2))
+
+    total = 0
+    desc_count = 0
+    for prov_id, url, key in fornecedores:
         servicos = fetch_services(url, key, prov_id)
         if not servicos:
             continue
@@ -266,6 +265,7 @@ for prov_id, url, key in fornecedores:
             except Exception as e:
                 print_warning(f"Erro no serviço: {e}")
                 continue
+
     print_success(f"Total inseridos: {total}")
     print_info(f"Serviços com descrição real: {desc_count}")
     if total == 0:
