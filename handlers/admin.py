@@ -431,8 +431,8 @@ async def test_api_fields(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
     import requests
-    url = os.getenv("SMM_API_URL_1")
-    key = os.getenv("SMM_API_KEY_1")
+    url = os.getenv("SMM_API_URL_2")
+    key = os.getenv("SMM_API_KEY_2")
     try:
         r = requests.post(url, data={'key': key, 'action': 'services'}, timeout=30)
         data = r.json()

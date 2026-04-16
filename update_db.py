@@ -210,10 +210,18 @@ def update_services(cursor):
     print_info(f"Margem: {margem}x | Promo: {promo*100}%")
 
     cursor.execute("DELETE FROM services")
-    fornecedores = [
-        (1, os.getenv("SMM_API_URL_1"), os.getenv("SMM_API_KEY_1")),
-        (2, os.getenv("SMM_API_URL_2"), os.getenv("SMM_API_KEY_2")),
-    ]
+    fornecedores = []
+# Só adiciona fornecedor se AMBAS as variáveis existirem e não forem vazias
+        url1 = os.getenv("SMM_API_URL_1")
+        key1 = os.getenv("SMM_API_KEY_1")
+    if url1 and key1:
+    fornecedores.append((1, url1, key1))
+
+        url2 = os.getenv("SMM_API_URL_2")
+        key2 = os.getenv("SMM_API_KEY_2")
+    if url2 and key2:
+    fornecedores.append((2, url2, key2))
+
     total = 0
     desc_count = 0
     for prov_id, url, key in fornecedores:
