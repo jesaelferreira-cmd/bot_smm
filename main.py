@@ -140,6 +140,7 @@ def main():
         app.add_handler(CommandHandler("debug_cats", debug_categories))
         app.add_handler(CommandHandler("saldo_api", status.check_provider_balance))
         app.add_handler(CommandHandler("corrigir_pedido", fix_order))
+        app.add_handler(CommandHandler("limpar_fornecedor", limpar_fornecedor))
         # =========================================================
         # 3. CALLBACKS GERAIS (FORA DO CONVERSATION)
         # =========================================================

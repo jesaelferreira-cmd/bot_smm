@@ -568,3 +568,18 @@ async def fix_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Erro: {e}")
     finally:
         conn.close()
+
+async def limpar_fornecedor(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Uso: /limpar_fornecedor 1 ou 2"""
+    if update.effective_user.id != ADMIN_ID:
+        return
+    try:
+        prov = int(context.args[0])
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM services WHERE provider = ?", (prov,))
+        conn.commit()
+        conn.close()
+        await update.message.reply_text(f"✅ Serviços do Fornecedor {prov} removidos.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Erro: {e}")
