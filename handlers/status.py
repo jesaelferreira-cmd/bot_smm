@@ -1,3 +1,5 @@
+import asyncio
+import aiohttp
 import sqlite3
 import requests
 import logging
@@ -61,8 +63,11 @@ def get_provider_credentials(provider_id: int):
 # ------------------------------------------------------------
 # HISTÓRICO DE PEDIDOS (comando /pedidos e botão Histórico)
 # ------------------------------------------------------------
+import asyncio
+import aiohttp
+
 async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Lista os últimos pedidos do usuário."""
+    """Lista os últimos pedidos com status atualizado em tempo real."""
     query = update.callback_query
     user_id = update.effective_user.id
 
@@ -72,88 +77,120 @@ async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         message = update.message
 
+    # Mensagem de "carregando"
+    if query:
+        await query.edit_message_text("⏳ Atualizando status dos seus pedidos...")
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    # Obtém os últimos 10 pedidos
+    cursor.execute("""
+        SELECT order_id_api, service_name, amount_cents, date, status, provider_id
+        FROM orders
+        WHERE user_id = ?
+        ORDER BY id DESC
+        LIMIT 10
+    """, (user_id,))
+    orders = cursor.fetchall()
+
+    if not orders:
+        text = "📭 **Nenhum pedido encontrado.**"
+        keyboard = [[InlineKeyboardButton("🏠 Menu Inicial", callback_data="back_to_start")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        if query:
+            await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+        else:
+            await message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+        conn.close()
+        return
+
+    # Atualiza status via API para pedidos pendentes/em andamento (apenas se tiver provider_id)
+    updated_orders = []
+    async with aiohttp.ClientSession() as session:
+        for order in orders:
+            order_id, service_name, amount_cents, date_str, current_status, provider_id = order
+            amount_float = amount_cents / 100.0 if amount_cents else 0.0
+
+            # Determina se precisa consultar a API
+            should_check = current_status in ["Pendente", "Em andamento", "Processing", "In Progress"]
+            new_status = current_status
+            if should_check and provider_id:
+                api_url, api_key = get_provider_credentials(provider_id)
+                if api_url and api_key:
+                    try:
+                        async with session.post(api_url, data={
+                            'key': api_key,
+                            'action': 'status',
+                            'order': order_id
+                        }, timeout=5) as resp:
+                            data = await resp.json()
+                            if 'status' in data:
+                                raw_status = str(data['status']).title()
+                                # Mapeia para português
+                                status_map = {
+                                    'Pending': 'Pendente',
+                                    'In Progress': 'Em andamento',
+                                    'Completed': 'Concluído',
+                                    'Partial': 'Parcial',
+                                    'Canceled': 'Cancelado',
+                                    'Cancelled': 'Cancelado',
+                                    'Processing': 'Processando'
+                                }
+                                new_status = status_map.get(raw_status, raw_status)
+                                # Atualiza no banco se mudou
+                                if new_status != current_status:
+                                    cursor.execute("UPDATE orders SET status = ? WHERE order_id_api = ?",
+                                                   (new_status, order_id))
+                                    conn.commit()
+                    except Exception as e:
+                        logger.warning(f"Erro ao atualizar status do pedido {order_id}: {e}")
+
+            # Emoji conforme status
+            status_emoji = {
+                'Concluído': '✅',
+                'Cancelado': '❌',
+                'Estornado': '❌',
+                'Pendente': '⏳',
+                'Em andamento': '🔄',
+                'Processando': '⚙️',
+                'Parcial': '⚠️'
+            }.get(new_status, '⏳')
+
+            updated_orders.append({
+                'order_id': order_id,
+                'service_name': service_name,
+                'amount': amount_float,
+                'date': date_str,
+                'status': new_status,
+                'emoji': status_emoji,
+                'provider': provider_id
+            })
+
+    conn.close()
+
+    # Monta a mensagem
+    text = "📋 **SEUS ÚLTIMOS PEDIDOS**\n\n"
+    for o in updated_orders:
+        order_id_display = o['order_id'] if o['order_id'] else "N/A"
+        text += (
+            f"{o['emoji']} **ID:** `{order_id_display}` (C{o['provider']})\n"
+            f"📦 {o['service_name']}\n"
+            f"💰 R$ {o['amount']:.2f} | 📅 {o['date']}\n"
+            f"📌 Status: **{o['status']}**\n\n"
+        )
+
     keyboard = [
+        [InlineKeyboardButton("🔄 Atualizar", callback_data="my_history")],
         [InlineKeyboardButton("🛍️ Ir para Loja", callback_data="back_to_categories")],
-        [InlineKeyboardButton("🏠 Voltar ao Menu", callback_data="back_to_start")]
+        [InlineKeyboardButton("🏠 Menu Inicial", callback_data="back_to_start")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    conn = None
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='orders'")
-        if not cursor.fetchone():
-            text = "📭 **Você ainda não tem pedidos realizados.**"
-        else:
-            cursor.execute("PRAGMA table_info(orders)")
-            columns = [col[1] for col in cursor.fetchall()]
-
-            if 'amount_cents' in columns:
-                amount_field = "amount_cents"
-            else:
-                amount_field = "amount * 100"
-
-            if 'provider_id' in columns:
-                provider_field = "provider_id"
-            else:
-                provider_field = "1"
-
-            cursor.execute(f"""
-                SELECT order_id_api, service_name, {amount_field} as amount_cents,
-                       date, status, {provider_field} as provider_id
-                FROM orders
-                WHERE user_id = ?
-                ORDER BY rowid DESC
-                LIMIT 10
-            """, (user_id,))
-            orders_list = cursor.fetchall()
-
-            if not orders_list:
-                text = "📭 **Histórico vazio.**\nFaça sua primeira compra em /comprar!"
-            else:
-                text = "📋 **SEUS ÚLTIMOS PEDIDOS**\n\n"
-                for o in orders_list:
-                    order_id = o[0] if o[0] else "N/A"
-                    service_name = o[1]
-                    amount_cents = o[2]
-                    amount_float = cents_to_float(amount_cents)
-                    date_str = o[3] if o[3] else "N/A"
-                    status_str = o[4] if o[4] else "Pendente"
-                    provider_id = o[5] if len(o) > 5 else 1
-
-                    if "Conclu" in status_str:
-                        emoji = "✅"
-                    elif "Cancel" in status_str or "Estorn" in status_str:
-                        emoji = "❌"
-                    else:
-                        emoji = "⏳"
-
-                    text += (
-                        f"{emoji} **ID:** `{order_id}` (C{provider_id})\n"
-                        f"📦 {service_name}\n"
-                        f"💰 R$ {amount_float:.2f} | 📅 {date_str}\n\n"
-                    )
-
-        if query:
-            if query.message.photo:
-                await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode="Markdown")
-            else:
-                await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode="Markdown")
-        else:
-            await message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
-
-    except Exception as e:
-        logger.error(f"Erro ao buscar pedidos: {e}")
-        error_msg = "⚠️ Houve um erro ao buscar seu histórico."
-        if query:
-            await query.message.reply_text(error_msg)
-        else:
-            await message.reply_text(error_msg)
-    finally:
-        if conn:
-            conn.close()
+    if query:
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+    else:
+        await message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
 
 # ------------------------------------------------------------
 # STATUS VIA COMANDO /status ID
