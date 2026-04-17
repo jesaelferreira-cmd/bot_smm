@@ -100,28 +100,123 @@ def get_categories() -> List[str]:
     try:
         with sqlite3.connect(str(DB_PATH)) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT DISTINCT category, provider FROM services WHERE rate > 0")
+            cursor.execute("""
+                SELECT DISTINCT category, provider
+                FROM services
+                WHERE rate > 0
+                ORDER BY category, provider
+            """)
             rows = cursor.fetchall()
+
+        # Palavras-chave proibidas (categorias que não devem aparecer)
+        forbidden_keywords = ["privado para api", "privado para aplicativo", "não utilize"]
+
         result = []
         for cat, prov in rows:
-            if cat and len(cat.strip()) >= 2:
-                clean_cat = cat.strip()
-                # Busca plataforma em uma nova conexão (ou use a mesma, mas não reexecute com o mesmo cursor ativo)
-                with sqlite3.connect(str(DB_PATH)) as conn2:
-                    cur2 = conn2.cursor()
-                    cur2.execute("SELECT name FROM services WHERE category = ? AND provider = ? LIMIT 1", (cat, prov))
-                    serv = cur2.fetchone()
-                platform_hint = ""
+            if not cat or len(cat.strip()) < 2:
+                continue
+
+            cat_lower = cat.lower()
+            # Pula categorias proibidas
+            if any(keyword in cat_lower for keyword in forbidden_keywords):
+                continue
+
+            clean_cat = cat.strip()
+
+            # Tenta extrair a plataforma do próprio nome da categoria
+            # (já que usamos o formato "Plataforma - Tipo")
+            platform_from_cat = None
+            if " - " in clean_cat:
+                platform_from_cat = clean_cat.split(" - ")[0]
+
+            # Se a plataforma foi identificada, usa o ícone correspondente
+            platform_hint = ""
+            if platform_from_cat:
+                platform_lower = platform_from_cat.lower()
+                if "instagram" in platform_lower:
+                    platform_hint = "📸"
+                elif "tiktok" in platform_lower:
+                    platform_hint = "🎵"
+                elif "youtube" in platform_lower:
+                    platform_hint = "▶️"
+                elif "facebook" in platform_lower:
+                    platform_hint = "🚀"
+                elif "kwai" in platform_lower:
+                    platform_hint = "🎥"
+                elif "telegram" in platform_lower:
+                    platform_hint = "✈️"
+                elif "x/twitter" in platform_lower or "twitter" in platform_lower:
+                    platform_hint = "🐦"
+                elif "whatsapp" in platform_lower:
+                    platform_hint = "📞"
+                elif "spotify" in platform_lower:
+                    platform_hint = "🎧"
+                elif "twitch" in platform_lower:
+                    platform_hint = "🟣"
+                elif "pinterest" in platform_lower:
+                    platform_hint = "📌"
+                elif "linkedin" in platform_lower:
+                    platform_hint = "💼"
+                elif "reddit" in platform_lower:
+                    platform_hint = "🤖"
+                elif "bluesky" in platform_lower:
+                    platform_hint = "🦋"
+                elif "threads" in platform_lower:
+                    platform_hint = "💬"
+                elif "snackvideo" in platform_lower:
+                    platform_hint = "🍿"
+                elif "tidal" in platform_lower:
+                    platform_hint = "🌊"
+                elif "dribbble" in platform_lower:
+                    platform_hint = "🏀"
+                elif "rumble" in platform_lower:
+                    platform_hint = "📹"
+                elif "coinmarketcap" in platform_lower:
+                    platform_hint = "📊"
+                elif "google" in platform_lower:
+                    platform_hint = "🌐"
+                elif "site" in platform_lower or "tráfego" in platform_lower:
+                    platform_hint = "🌍"
+                elif "kick" in platform_lower:
+                    platform_hint = "🥊"
+                elif "discord" in platform_lower:
+                    platform_hint = "💬"
+                elif "trovo" in platform_lower:
+                    platform_hint = "👾"
+                elif "denúncias" in platform_lower:
+                    platform_hint = "🚫"
+                else:
+                    platform_hint = "🚀"
+            else:
+                # Fallback: busca o primeiro serviço da categoria para inferir plataforma
+                cursor2 = conn.cursor()
+                cursor2.execute(
+                    "SELECT name FROM services WHERE category = ? AND provider = ? LIMIT 1",
+                    (cat, prov)
+                )
+                serv = cursor2.fetchone()
                 if serv:
                     name_lower = serv[0].lower()
-                    if "instagram" in name_lower: platform_hint = "📸"
-                    elif "tiktok" in name_lower: platform_hint = "🎵"
-                    elif "youtube" in name_lower: platform_hint = "▶️"
-                    elif "facebook" in name_lower: platform_hint = "👥"
-                    elif "kwai" in name_lower: platform_hint = "🎥"
-                    elif "telegram" in name_lower: platform_hint = "✈️"
-                display = f"{platform_hint} {clean_cat} [C{prov}]".strip()
-                result.append(display)
+                    if "instagram" in name_lower:
+                        platform_hint = "📸"
+                    elif "tiktok" in name_lower:
+                        platform_hint = "🎵"
+                    elif "youtube" in name_lower:
+                        platform_hint = "▶️"
+                    elif "facebook" in name_lower:
+                        platform_hint = "👥"
+                    elif "kwai" in name_lower:
+                        platform_hint = "🎥"
+                    elif "telegram" in name_lower:
+                        platform_hint = "✈️"
+                    else:
+                        platform_hint = "🚀"
+                else:
+                    platform_hint = "🚀"
+
+            display = f"{platform_hint} {clean_cat} [C{prov}]".strip()
+            result.append(display)
+
         return result
     except Exception as e:
         logger.error(f"Erro em get_categories: {e}")

@@ -100,13 +100,22 @@ def clean_text(text: str) -> str:
     return text.strip()
 
 def normalize_category(raw_category: str, platform: str) -> str:
-    """Cria uma categoria padronizada no formato 'Plataforma - Tipo'."""
-    # Limpa a string
+    """Cria categoria limpa. Remove 'Outros' do início e não adiciona prefixo quando plataforma é desconhecida."""
     clean = clean_text(raw_category)
     if not clean:
         clean = "Geral"
 
-    # Remove prefixo da plataforma se já existir
+    # Se a plataforma for "Outros", apenas retorna o texto limpo, sem prefixo
+    if platform == "Outros":
+        # Remove qualquer "Outros - " ou "Outros " que já esteja no início
+        lower_clean = clean.lower()
+        if lower_clean.startswith("outros - "):
+            clean = clean[7:].strip()
+        elif lower_clean.startswith("outros "):
+            clean = clean[6:].strip()
+        return clean
+
+    # Para plataformas conhecidas, formata como "Plataforma - Tipo"
     lower_clean = clean.lower()
     lower_platform = platform.lower()
     if lower_clean.startswith(lower_platform):
@@ -248,6 +257,11 @@ def update_services(cursor):
                 # NOVA LÓGICA DE CATEGORIZAÇÃO
                 platform = detect_platform(name)
                 cat = normalize_category(raw_cat, platform)
+
+# Pular categorias proibidas (Privado para API, etc.)
+                forbidden_keywords = ["privado para api", "privado para aplicativo", "não utilize"]
+                if any(keyword in cat.lower() for keyword in forbidden_keywords):
+                    continue  # pula este serviço
 
                 price = round((rate * margem) * (1 - promo), 2)
                 min_q = int(min_q) if min_q else 0

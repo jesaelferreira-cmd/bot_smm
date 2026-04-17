@@ -48,7 +48,7 @@ from handlers.services import (
     CONFIRMING
 )
 from handlers.admin import debug_categories, fix_order
-
+from handlers.admin import limpar_fornecedor
 # Configuração de logs
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
