@@ -53,21 +53,17 @@ def get_order_from_db(order_id: str, user_id: int = None):
 
 def get_provider_credentials(provider_id: int):
     """Retorna URL e chave da API conforme o provedor."""
+    from config import SMM_API_URL_1, SMM_API_KEY_1, SMM_API_URL_2, SMM_API_KEY_2
     if provider_id == 1:
         return SMM_API_URL_1, SMM_API_KEY_1
     elif provider_id == 2:
         return SMM_API_URL_2, SMM_API_KEY_2
     else:
+        logger.warning(f"Provedor desconhecido: {provider_id}")
         return None, None
 
-# ------------------------------------------------------------
-# HISTÓRICO DE PEDIDOS (comando /pedidos e botão Histórico)
-# ------------------------------------------------------------
-import asyncio
-import aiohttp
-
 async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Lista os últimos pedidos com status atualizado em tempo real."""
+    """Lista os últimos pedidos com status atualizado via API."""
     query = update.callback_query
     user_id = update.effective_user.id
 
@@ -77,16 +73,19 @@ async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         message = update.message
 
-    # Mensagem de "carregando"
+    # Mensagem de carregamento
     if query:
-        await query.edit_message_text("⏳ Atualizando status dos seus pedidos...")
+        try:
+            await query.edit_message_text("⏳ Consultando status dos seus pedidos...")
+        except Exception:
+            pass
 
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    # Obtém os últimos 10 pedidos
+    # Busca os últimos 10 pedidos
     cursor.execute("""
-        SELECT order_id_api, service_name, amount_cents, date, status, provider_id
+        SELECT order_id_api, service_name, amount_cents, date, status, COALESCE(provider_id, 1) as provider_id
         FROM orders
         WHERE user_id = ?
         ORDER BY id DESC
@@ -105,48 +104,57 @@ async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.close()
         return
 
-    # Atualiza status via API para pedidos pendentes/em andamento (apenas se tiver provider_id)
     updated_orders = []
     async with aiohttp.ClientSession() as session:
         for order in orders:
             order_id, service_name, amount_cents, date_str, current_status, provider_id = order
             amount_float = amount_cents / 100.0 if amount_cents else 0.0
 
-            # Determina se precisa consultar a API
-            should_check = current_status in ["Pendente", "Em andamento", "Processing", "In Progress"]
-            new_status = current_status
-            if should_check and provider_id:
+            # Determina se precisa consultar a API (status que podem mudar)
+            should_check = current_status in ["Pendente", "Em andamento", "Processing", "In Progress", None]
+            new_status = current_status if current_status else "Pendente"
+
+            if should_check and provider_id and order_id:
                 api_url, api_key = get_provider_credentials(provider_id)
                 if api_url and api_key:
+                    logger.info(f"🔍 Consultando status do pedido {order_id} (provedor {provider_id})")
+                    payload = {'key': api_key, 'action': 'status', 'order': order_id}
                     try:
-                        async with session.post(api_url, data={
-                            'key': api_key,
-                            'action': 'status',
-                            'order': order_id
-                        }, timeout=5) as resp:
-                            data = await resp.json()
-                            if 'status' in data:
-                                raw_status = str(data['status']).title()
-                                # Mapeia para português
-                                status_map = {
-                                    'Pending': 'Pendente',
-                                    'In Progress': 'Em andamento',
-                                    'Completed': 'Concluído',
-                                    'Partial': 'Parcial',
-                                    'Canceled': 'Cancelado',
-                                    'Cancelled': 'Cancelado',
-                                    'Processing': 'Processando'
-                                }
-                                new_status = status_map.get(raw_status, raw_status)
-                                # Atualiza no banco se mudou
-                                if new_status != current_status:
-                                    cursor.execute("UPDATE orders SET status = ? WHERE order_id_api = ?",
-                                                   (new_status, order_id))
-                                    conn.commit()
-                    except Exception as e:
-                        logger.warning(f"Erro ao atualizar status do pedido {order_id}: {e}")
+                        async with session.post(api_url, data=payload, timeout=15) as resp:
+                            if resp.status == 200:
+                                data = await resp.json()
+                                logger.info(f"📦 Resposta API pedido {order_id}: {data}")
+                                if 'status' in data:
+                                    raw_status = str(data['status']).title()
+                                    status_map = {
+                                        'Pending': 'Pendente',
+                                        'In Progress': 'Em andamento',
+                                        'Completed': 'Concluído',
+                                        'Partial': 'Parcial',
+                                        'Canceled': 'Cancelado',
+                                        'Cancelled': 'Cancelado',
+                                        'Processing': 'Processando'
+                                    }
+                                    new_status = status_map.get(raw_status, raw_status)
 
-            # Emoji conforme status
+                                    # Atualiza no banco se o status mudou
+                                    if new_status != current_status:
+                                        cursor.execute(
+                                            "UPDATE orders SET status = ? WHERE order_id_api = ?",
+                                            (new_status, order_id)
+                                        )
+                                        conn.commit()
+                                        logger.info(f"✅ Status do pedido {order_id} atualizado para '{new_status}'")
+                            else:
+                                logger.warning(f"⚠️ HTTP {resp.status} ao consultar pedido {order_id}")
+                    except asyncio.TimeoutError:
+                        logger.warning(f"⏱️ Timeout ao consultar pedido {order_id}")
+                    except Exception as e:
+                        logger.error(f"❌ Erro ao consultar pedido {order_id}: {e}")
+                else:
+                    logger.warning(f"🔑 Credenciais ausentes para provedor {provider_id} (pedido {order_id})")
+
+            # Emoji conforme o status final
             status_emoji = {
                 'Concluído': '✅',
                 'Cancelado': '❌',
@@ -188,10 +196,13 @@ async def my_orders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     if query:
-        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+        try:
+            await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+        except Exception as e:
+            logger.error(f"Erro ao editar mensagem do histórico: {e}")
+            await query.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
     else:
         await message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
-
 # ------------------------------------------------------------
 # STATUS VIA COMANDO /status ID
 # ------------------------------------------------------------
