@@ -243,7 +243,3 @@ async def check_payment_loop(context: ContextTypes.DEFAULT_TYPE, user_id: int, p
 
     logger.info(f"⏰ Loop expirado para PIX {pix_id} (usuário {user_id}) - não confirmado em 20min")
 
-
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    logger.error(msg="Erro não tratado:", exc_info=context.error)
-
