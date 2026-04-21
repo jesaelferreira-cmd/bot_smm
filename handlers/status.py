@@ -323,47 +323,88 @@ async def order_status_callback(update: Update, context: ContextTypes.DEFAULT_TY
         payload = {'key': api_key, 'action': 'status', 'order': order_id}
         response = requests.post(api_url, data=payload, timeout=20).json()
 
-        if 'status' in response:
-            raw_status = str(response.get('status', '')).title()
-            remains = response.get('remains', 'N/A')
-            start_count = response.get('start_count', 'N/A')
+if 'status' in response:
+    raw_status = str(response.get('status', '')).title()
+    remains = response.get('remains', 'N/A')
+    start_count = response.get('start_count', 'N/A')
 
-            status_map = {
-                'Pending': '⏳ Pendente',
-                'In Progress': '🔄 Em andamento',
-                'Completed': '✅ Concluído',
-                'Partial': '⚠️ Parcial',
-                'Canceled': '❌ Cancelado',
-                'Cancelled': '❌ Cancelado',
-                'Processing': '⚙️ Processando'
-            }
-            display_status = status_map.get(raw_status, raw_status)
+    status_map = {
+        'Pending': '⏳ Pendente',
+        'In Progress': '🔄 Em andamento',
+        'Completed': '✅ Concluído',
+        'Partial': '⚠️ Parcial',
+        'Canceled': '❌ Cancelado',
+        'Cancelled': '❌ Cancelado',
+        'Processing': '⚙️ Processando'
+    }
+    display_status = status_map.get(raw_status, raw_status)
 
-            # Estorno automático se necessário
-            if raw_status in ['Canceled', 'Cancelled', 'Partial'] and current_status not in ['Cancelado', 'Estornado']:
-                conn = sqlite3.connect(DB_PATH)
-                cursor = conn.cursor()
-                cursor.execute("UPDATE users SET main_balance_cents = main_balance_cents + ? WHERE user_id = ?",
-                               (amount_cents, user_id))
-                cursor.execute("UPDATE orders SET status = ? WHERE order_id_api = ?", ("Estornado", order_id))
-                conn.commit()
-                conn.close()
+    # Estorno automático se necessário
+    if raw_status in ['Canceled', 'Cancelled', 'Partial'] and current_status not in ['Cancelado', 'Estornado']:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET main_balance_cents = main_balance_cents + ? WHERE user_id = ?",
+                       (amount_cents, user_id))
+        cursor.execute("UPDATE orders SET status = ? WHERE order_id_api = ?", ("Estornado", order_id))
+        conn.commit()
+        conn.close()
 
-                await query.message.reply_text(
-                    f"❌ **PEDIDO CANCELADO**\n\n"
-                    f"💰 O valor de **R$ {amount_float:.2f}** foi devolvido ao seu saldo.",
-                    parse_mode="Markdown"
-                )
-                return
+        await query.message.reply_text(
+            f"❌ **PEDIDO CANCELADO**\n\n"
+            f"💰 O valor de **R$ {amount_float:.2f}** foi devolvido ao seu saldo.",
+            parse_mode="Markdown"
+        )
+        return
 
-            msg = (
-                f"📊 **STATUS DO PEDIDO**\n\n"
-                f"🆔 `{order_id}` | {service_name}\n"
-                f"📌 {display_status}\n"
-                f"📦 Restante: {remains} | 🚀 Início: {start_count}\n"
-                f"💰 Valor: R$ {amount_float:.2f}"
-            )
-            await query.message.reply_text(msg, parse_mode="Markdown")
+    # ========== NOVA PARTE: CÁLCULO DE PROGRESSO ==========
+    progress_text = ""
+    status_hint = ""
+    try:
+        remains_int = int(remains) if remains != 'N/A' else None
+        start_int = int(start_count) if start_count != 'N/A' else None
+    except (ValueError, TypeError):
+        remains_int = None
+        start_int = None
+
+    if raw_status == 'Pending':
+        status_hint = " (aguardando início)"
+    elif raw_status == 'In Progress':
+        status_hint = " (entrega em andamento)"
+    elif raw_status == 'Completed':
+        status_hint = " (pedido finalizado)"
+    elif raw_status == 'Canceled' or raw_status == 'Cancelled':
+        status_hint = " (reembolsado)"
+    elif raw_status == 'Partial':
+        status_hint = " (parcialmente concluído)"
+
+    if remains_int is not None and start_int is not None and start_int > 0:
+        delivered = start_int - remains_int
+        percent = (delivered / start_int) * 100 if start_int > 0 else 0
+        # Barra de progresso com 10 blocos
+        filled = int(percent / 10)
+        empty = 10 - filled
+        bar = "█" * filled + "▒" * empty
+        progress_text = (
+            f"📈 **Progresso:** {bar} {percent:.1f}%\n"
+            f"✅ **Entregue:** {delivered} / {start_int}\n"
+        )
+    elif remains_int is not None:
+        progress_text = f"⏳ **Restante:** {remains_int}\n"
+    else:
+        progress_text = f"📦 **Restante:** {remains}\n"
+
+    # Monta a mensagem final
+    msg = (
+        f"📊 **STATUS DO PEDIDO**\n\n"
+        f"🆔 `{order_id}` | {service_name}\n"
+        f"📌 **Status:** {display_status}{status_hint}\n"
+        f"{progress_text}"
+        f"🚀 **Início:** {start_count if start_count != 'N/A' else 'Aguardando'}\n"
+        f"💰 **Valor:** R$ {amount_float:.2f}"
+    )
+    # ========== FIM DA NOVA PARTE ==========
+
+    await query.message.reply_text(msg, parse_mode="Markdown")
         else:
             error_msg = response.get('error', 'Erro desconhecido')
             await query.message.reply_text(f"❌ Erro: {error_msg}")
