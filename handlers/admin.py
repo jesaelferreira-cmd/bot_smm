@@ -26,12 +26,8 @@ def float_to_cents(value: float) -> int:
 def get_admin_stats():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    
-    # Total de usuários
     cursor.execute("SELECT COUNT(*) FROM users")
     users = cursor.fetchone()[0]
-    
-    # Total de vendas e faturamento (excluindo cancelados/estornados)
     cursor.execute("""
         SELECT COUNT(*), COALESCE(SUM(amount_cents), 0)
         FROM orders
@@ -39,13 +35,9 @@ def get_admin_stats():
     """)
     sales, total_cents = cursor.fetchone()
     money = total_cents / 100.0
-    
     conn.close()
     return users, sales, money
 
-# =========================================================
-# 1. PAINEL ADMIN
-# =========================================================
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not is_admin(user_id):
@@ -54,16 +46,16 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     users, sales, money = get_admin_stats()
 
-def get_bal(url, key):
-    if not url or not key:
-        return "Offline ❌"
-    try:
-        r = requests.post(url, data={'key': key, 'action': 'balance'}, timeout=10)
-        data = r.json()
-        return f"{data.get('balance', '0')} {data.get('currency', 'BRL')}"
-    except Exception as e:
-        logger.error(f"Erro ao obter saldo do fornecedor: {e}")
-        return "Offline ❌"
+    def get_bal(url, key):
+        if not url or not key:
+            return "Offline ❌"
+        try:
+            r = requests.post(url, data={'key': key, 'action': 'balance'}, timeout=10)
+            data = r.json()
+            return f"{data.get('balance', '0')} {data.get('currency', 'BRL')}"
+        except Exception as e:
+            logger.error(f"Erro ao obter saldo do fornecedor: {e}")
+            return "Offline ❌"
 
     bal1 = get_bal(SMM_API_URL_1, SMM_API_KEY_1)
     bal2 = get_bal(SMM_API_URL_2, SMM_API_KEY_2)
