@@ -24,30 +24,24 @@ def float_to_cents(value: float) -> int:
     return int(Decimal(str(value)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP) * 100)
 
 def get_admin_stats():
-    """Retorna estatísticas usando as colunas em centavos"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-
+    
+    # Total de usuários
     cursor.execute("SELECT COUNT(*) FROM users")
-    total_users = cursor.fetchone()[0]
-
-    try:
-        cursor.execute("SELECT COUNT(*), COALESCE(SUM(amount_cents), 0) FROM orders")
-        vendas = cursor.fetchone()
-        total_vendas = vendas[0] or 0
-        faturamento_cents = vendas[1] or 0
-        faturamento = cents_to_float(faturamento_cents)
-    except:
-        try:
-            cursor.execute("SELECT COUNT(*), COALESCE(SUM(amount), 0) FROM orders")
-            vendas = cursor.fetchone()
-            total_vendas = vendas[0] or 0
-            faturamento = float(vendas[1] or 0.0)
-        except:
-            total_vendas, faturamento = 0, 0.0
-
+    users = cursor.fetchone()[0]
+    
+    # Total de vendas e faturamento (excluindo cancelados/estornados)
+    cursor.execute("""
+        SELECT COUNT(*), COALESCE(SUM(amount_cents), 0)
+        FROM orders
+        WHERE status NOT IN ('Cancelado', 'Estornado', 'Canceled', 'Cancelled')
+    """)
+    sales, total_cents = cursor.fetchone()
+    money = total_cents / 100.0
+    
     conn.close()
-    return total_users, total_vendas, faturamento
+    return users, sales, money
 
 # =========================================================
 # 1. PAINEL ADMIN
@@ -60,14 +54,16 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     users, sales, money = get_admin_stats()
 
-    def get_bal(url, key):
-        try:
-            r = requests.post(url, data={'key': key, 'action': 'balance'}, timeout=5)
-            data = r.json()
-            return f"{data.get('balance', '0')} {data.get('currency', 'BRL')}"
-        except Exception as e:
-            logger.error(f"Erro ao obter saldo do fornecedor: {e}")
-            return "Offline ❌"
+def get_bal(url, key):
+    if not url or not key:
+        return "Offline ❌"
+    try:
+        r = requests.post(url, data={'key': key, 'action': 'balance'}, timeout=10)
+        data = r.json()
+        return f"{data.get('balance', '0')} {data.get('currency', 'BRL')}"
+    except Exception as e:
+        logger.error(f"Erro ao obter saldo do fornecedor: {e}")
+        return "Offline ❌"
 
     bal1 = get_bal(SMM_API_URL_1, SMM_API_KEY_1)
     bal2 = get_bal(SMM_API_URL_2, SMM_API_KEY_2)
