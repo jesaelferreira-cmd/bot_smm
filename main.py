@@ -49,6 +49,7 @@ from handlers.services import (
 )
 from handlers.admin import debug_categories, fix_order
 from handlers.admin import limpar_fornecedor
+from handlers.consultoria import consultoria_handler
 # Configuração de logs
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -152,6 +153,9 @@ def main():
         app.add_handler(CallbackQueryHandler(balance.pix_command, pattern="^add_balance$"))
         app.add_handler(CallbackQueryHandler(start.start_command, pattern="^back_to_start$"))
         app.add_handler(CallbackQueryHandler(status.order_status_callback, pattern="^status_"))
+
+
+        app.add_handler(consultoria_handler)
         # =========================================================
         # 4. AFILIADOS - CONVERSATION HANDLER PARA SAQUE PIX
         # =========================================================
