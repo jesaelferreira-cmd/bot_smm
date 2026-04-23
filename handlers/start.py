@@ -114,8 +114,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("🗓 Histórico", callback_data="my_history"),
             InlineKeyboardButton("🤝 Afiliados", callback_data="affiliates")
         ],
-        [InlineKeyboardButton("🎧 Suporte", url="https://t.me/LPsSuporte")]
-        [InlineKeyboardButton("🔍 Consultoria de Perfil", callback_data="consultoria")],
+        [InlineKeyboardButton("🎧 Suporte", url="https://t.me/LPsSuporte")],
+        [InlineKeyboardButton("🔍 Consultoria de Perfil", callback_data="consultoria")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
