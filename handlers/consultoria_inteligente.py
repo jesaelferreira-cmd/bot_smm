@@ -9,7 +9,6 @@ logger = logging.getLogger(__name__)
 # EXTRAÇÃO DE USERNAME
 # ------------------------------------------------
 def extract_username(link: str):
-    """Extrai a plataforma e o username de um link de perfil."""
     patterns = {
         'instagram': r'(?:https?://)?(?:www\.)?instagram\.com/([a-zA-Z0-9_.]+)',
         'tiktok': r'(?:https?://)?(?:www\.)?tiktok\.com/@([a-zA-Z0-9_.]+)',
@@ -22,7 +21,7 @@ def extract_username(link: str):
     return None, None
 
 # ------------------------------------------------
-# MAPEAMENTO DE NICHOS (expansível)
+# MAPEAMENTO DE NICHOS
 # ------------------------------------------------
 NICHO_KEYWORDS = {
     'Beleza': ['makeup', 'beleza', 'cosméticos', 'skincare', 'cabelo', 'maquiagem'],
@@ -35,9 +34,7 @@ NICHO_KEYWORDS = {
 }
 
 def detectar_nicho(username, platform, conn, user_id):
-    """
-    Detecta o nicho mais provável com base no username e no histórico de compras.
-    """
+    """Detecta o nicho com base no username e nas categorias dos serviços já comprados (via service_name)."""
     username_lower = username.lower()
     scores = {nicho: 0 for nicho in NICHO_KEYWORDS}
     for nicho, palavras in NICHO_KEYWORDS.items():
@@ -45,75 +42,79 @@ def detectar_nicho(username, platform, conn, user_id):
             if palavra in username_lower:
                 scores[nicho] += 1
 
-    # Refina com histórico de compras
-    cursor = conn.cursor()
+    # Tenta inferir pelo nome dos serviços comprados anteriormente
     try:
+        cursor = conn.cursor()
         cursor.execute("""
-            SELECT s.category FROM orders o
-            JOIN services s ON o.service_id = s.service_id
-            WHERE o.user_id = ? AND o.link LIKE ?
-        """, (user_id, f'%{username}%'))
+            SELECT DISTINCT service_name FROM orders
+            WHERE user_id = ? AND (link LIKE ? OR service_name LIKE ?)
+        """, (user_id, f'%{username}%', f'%{username}%'))
         for row in cursor.fetchall():
-            cat_lower = row[0].lower()
+            nome_servico = row[0].lower() if row[0] else ''
             for nicho, palavras in NICHO_KEYWORDS.items():
                 for palavra in palavras:
-                    if palavra in cat_lower:
+                    if palavra in nome_servico:
                         scores[nicho] += 0.5
-    except sqlite3.OperationalError as e:
-        logger.warning(f"Erro ao consultar histórico (provavelmente coluna 'link' ausente): {e}")
-        # Fallback: ignora essa parte se a estrutura não existir
+    except sqlite3.OperationalError:
+        # Coluna link pode ainda não existir; ignora essa parte
         pass
 
     melhor = max(scores, key=scores.get)
     return melhor if scores[melhor] > 0 else 'Geral'
 
 def recomendar_servicos(nicho, platform, conn, user_id):
-    """
-    Retorna até 5 serviços recomendados, evitando os já comprados e priorizando
-    aqueles com melhor avaliação no histórico de consultoria.
-    """
+    """Recomenda serviços ainda não comprados, priorizando os com bom feedback no consultoria_log."""
     cursor = conn.cursor()
 
-    # Serviços disponíveis para a plataforma
+    # 1. Serviços disponíveis para a plataforma
     cursor.execute("""
         SELECT service_id, name, rate, min, max, category
         FROM services
         WHERE category LIKE ? AND rate > 0
     """, (f'%{platform}%',))
-    todos = cursor.fetchall()
+    todos_servicos = cursor.fetchall()
 
-    # Serviços já comprados pelo usuário (usando link ou nome do perfil)
+    # 2. Nomes de serviços já comprados para esta plataforma (evitar recomendar de novo)
     cursor.execute("""
-        SELECT DISTINCT service_id FROM orders
+        SELECT DISTINCT service_name FROM orders
         WHERE user_id = ? AND (link LIKE ? OR service_name LIKE ?)
     """, (user_id, f'%{platform}%', f'%{platform}%'))
-    comprados = {row[0] for row in cursor.fetchall()}
+    nomes_comprados = {row[0].strip().lower() for row in cursor.fetchall() if row[0]}
 
-    # Histórico de performance (consultoria_log)
-    cursor.execute("""
-        SELECT service_id, SUM(comprou) as compras, SUM(CASE WHEN avaliacao='positiva' THEN 1 ELSE 0 END) as positivas
-        FROM consultoria_log
-        WHERE nicho = ? AND platform = ?
-        GROUP BY service_id
-    """, (nicho, platform))
+    # 3. Histórico de performance no consultoria_log (se a tabela existir)
     perf = {}
-    for row in cursor.fetchall():
-        sid, compras, positivas = row
-        perf[sid] = positivas / compras if compras > 0 else 0.0
+    try:
+        cursor.execute("""
+            SELECT service_id, SUM(comprou) as compras,
+                   SUM(CASE WHEN avaliacao='positiva' THEN 1 ELSE 0 END) as positivas
+            FROM consultoria_log
+            WHERE nicho = ? AND platform = ?
+            GROUP BY service_id
+        """, (nicho, platform))
+        for row in cursor.fetchall():
+            sid, compras, positivas = row
+            perf[sid] = positivas / compras if compras > 0 else 0.0
+    except sqlite3.OperationalError:
+        # Tabela consultoria_log ainda não existe
+        pass
 
+    # 4. Monta a lista de recomendações
     recomendacoes = []
-    for s in todos:
+    for s in todos_servicos:
         sid, name, rate, min_q, max_q, cat = s
-        if sid in comprados:
+        # Pula se o nome do serviço já foi comprado (comparação case‑insensitive)
+        if name.strip().lower() in nomes_comprados:
             continue
-        score = perf.get(sid, 0.1)  # se nunca foi recomendado, dá um pequeno bônus
+        score = perf.get(sid, 0.0)
+        if score == 0.0:
+            score = 0.1  # pequeno bônus para novidade
         recomendacoes.append((sid, name, rate, min_q, max_q, cat, score))
 
     recomendacoes.sort(key=lambda x: x[-1], reverse=True)
     return recomendacoes[:5]
 
 def analisar_perfil(link, user_id):
-    """Realiza a análise completa e retorna (recomendacoes, relatorio)."""
+    """Retorna (lista_recomendacoes, texto_relatorio)."""
     platform, username = extract_username(link)
     if not platform:
         return None, "❌ Link inválido. Certifique-se de que é um perfil público do Instagram, TikTok ou YouTube."
