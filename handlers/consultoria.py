@@ -1,8 +1,12 @@
 import sqlite3
+import logging
 from config import DB_PATH
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, filters, CallbackQueryHandler
 from handlers.consultoria_inteligente import analisar_perfil, registrar_compra, avaliar_recomendacao
+
+
+logger = logging.getLogger(__name__)
 
 ASKING_LINK, FEEDBACK = range(2)
 
@@ -48,17 +52,15 @@ async def receive_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     # Envia relatório com os botões, com fallback caso o Markdown quebre
+
+# Envia relatório com os botões, sem formatação Markdown para evitar erros de parsing
     mensagem_final = report + "\n\nEscolha um serviço para comprar agora:"
     try:
-        await update.message.reply_text(mensagem_final, reply_markup=reply_markup, parse_mode="Markdown")
+        await update.message.reply_text(mensagem_final, reply_markup=reply_markup)
     except Exception as e:
-        logger.warning(f"Falha ao enviar relatório com Markdown: {e}. Enviando sem formatação.")
-        try:
-            await update.message.reply_text(mensagem_final, reply_markup=reply_markup)
-        except Exception as e2:
-            logger.error(f"Erro crítico ao enviar relatório: {e2}")
-            await update.message.reply_text("⚠️ Não foi possível exibir o relatório agora. Tente novamente.")
-            return ConversationHandler.END
+        logger.error(f"Erro crítico ao enviar relatório: {e}")
+        await update.message.reply_text("⚠️ Não foi possível exibir o relatório agora. Tente novamente mais tarde.")
+        return ConversationHandler.END
 
     return FEEDBACK
 
