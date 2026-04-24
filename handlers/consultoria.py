@@ -13,24 +13,53 @@ async def start_consultoria(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ASKING_LINK
 
 async def receive_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Recebe o link do perfil, gera análise e exibe recomendações."""
     link = update.message.text.strip()
     user_id = update.effective_user.id
-    recomendacoes, report = analisar_perfil(link, user_id)
+
+    try:
+        recomendacoes, report = analisar_perfil(link, user_id)
+    except Exception as e:
+        logger.error(f"Erro em analisar_perfil: {e}")
+        await update.message.reply_text("⚠️ Ocorreu um erro ao analisar seu perfil. Tente novamente mais tarde.")
+        return ConversationHandler.END
+
     if recomendacoes is None:
-        await update.message.reply_text(report)
+        # Enviar relatório de erro com fallback de parsing
+        try:
+            await update.message.reply_text(report, parse_mode="Markdown")
+        except Exception:
+            await update.message.reply_text(report)
         return ConversationHandler.END
 
     # Armazena recomendações para possível feedback
     context.user_data['consultoria_recomendacoes'] = recomendacoes
     context.user_data['consultoria_link'] = link
 
+    # Monta teclado com as recomendações (limitando nome para não estourar callback_data)
     keyboard = []
     for sid, name, rate, min_q, max_q, cat, score in recomendacoes:
-        keyboard.append([InlineKeyboardButton(f"🛒 {name}", callback_data=f"buyrec_{sid}")])
+        # Trunca o nome do serviço se for muito longo (Telegram limita callback_data em 64 bytes)
+        short_name = (name[:40] + '…') if len(name) > 40 else name
+        button_text = f"🛒 {short_name}"
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=f"buyrec_{sid}")])
+
     keyboard.append([InlineKeyboardButton("✅ Finalizar", callback_data="end_consultoria")])
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text(report + "\n\nEscolha um serviço para comprar agora:", reply_markup=reply_markup, parse_mode="Markdown")
+    # Envia relatório com os botões, com fallback caso o Markdown quebre
+    mensagem_final = report + "\n\nEscolha um serviço para comprar agora:"
+    try:
+        await update.message.reply_text(mensagem_final, reply_markup=reply_markup, parse_mode="Markdown")
+    except Exception as e:
+        logger.warning(f"Falha ao enviar relatório com Markdown: {e}. Enviando sem formatação.")
+        try:
+            await update.message.reply_text(mensagem_final, reply_markup=reply_markup)
+        except Exception as e2:
+            logger.error(f"Erro crítico ao enviar relatório: {e2}")
+            await update.message.reply_text("⚠️ Não foi possível exibir o relatório agora. Tente novamente.")
+            return ConversationHandler.END
+
     return FEEDBACK
 
 async def buy_recommendation(update: Update, context: ContextTypes.DEFAULT_TYPE):
