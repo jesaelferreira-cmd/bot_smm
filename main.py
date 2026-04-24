@@ -119,7 +119,7 @@ def main():
         )
 
         app.add_handler(conv_handler)
-
+        app.add_handler(consultoria_handler)
         # =========================================================
         # 2. COMANDOS GERAIS
         # =========================================================
@@ -157,8 +157,6 @@ def main():
         app.add_handler(CallbackQueryHandler(start.start_command, pattern="^back_to_start$"))
         app.add_handler(CallbackQueryHandler(status.order_status_callback, pattern="^status_"))
 
-
-        app.add_handler(consultoria_handler)
         # =========================================================
         # 4. AFILIADOS - CONVERSATION HANDLER PARA SAQUE PIX
         # =========================================================
