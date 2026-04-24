@@ -571,3 +571,24 @@ async def limpar_fornecedor(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ Serviços do Fornecedor {prov} removidos.")
     except Exception as e:
         await update.message.reply_text(f"❌ Erro: {e}")
+
+async def add_link_column(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /addlink – adiciona a coluna 'link' na tabela orders, se não existir."""
+    if not is_admin(update.effective_user.id):
+        return
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("PRAGMA table_info(orders)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if 'link' in columns:
+            await update.message.reply_text("✅ A coluna 'link' já existe na tabela orders.")
+        else:
+            cursor.execute("ALTER TABLE orders ADD COLUMN link TEXT")
+            conn.commit()
+            await update.message.reply_text("✅ Coluna 'link' adicionada com sucesso!")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Erro: {e}")
+    finally:
+        conn.close()

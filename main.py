@@ -50,6 +50,8 @@ from handlers.services import (
 from handlers.admin import debug_categories, fix_order
 from handlers.admin import limpar_fornecedor
 from handlers.consultoria import consultoria_handler
+from handlers.admin import add_link_column
+
 # Configuração de logs
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -142,6 +144,7 @@ def main():
         app.add_handler(CommandHandler("saldo_api", status.check_provider_balance))
         app.add_handler(CommandHandler("corrigir_pedido", fix_order))
         app.add_handler(CommandHandler("limpar_fornecedor", limpar_fornecedor))
+        app.add_handler(CommandHandler("addlink", add_link_column))
         # =========================================================
         # 3. CALLBACKS GERAIS (FORA DO CONVERSATION)
         # =========================================================
