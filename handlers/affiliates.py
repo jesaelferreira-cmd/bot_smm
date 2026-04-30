@@ -362,7 +362,7 @@ async def receive_pix_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         # Tenta notificar o administrador (se falhar, não debita)
-            await context.bot.send_message(
+        await context.bot.send_message(
                 chat_id=ADMIN_ID,
                 text=admin_text,
                 parse_mode="Markdown"
