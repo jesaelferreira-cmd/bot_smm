@@ -352,8 +352,6 @@ async def receive_pix_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return ConversationHandler.END
 
         # Converte para string e escapa caracteres especiais para MarkdownV2
-        safe_name = escape_markdown(str(name), version=2)
-        safe_key = escape_markdown(str(pix_key), version=2)
         admin_text = (
             f"🚨 **SAQUE PIX SOLICITADO**\n\n"
             f"👤 Usuário: {safe_name}\n"
@@ -368,7 +366,7 @@ async def receive_pix_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
                 text=admin_text,
-                parse_mode="MarkdownV2"
+                parse_mode="Markdown"
             )
         except Exception as e:
             logger.error(f"Falha ao notificar admin: {e}")
