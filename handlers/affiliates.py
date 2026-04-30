@@ -319,10 +319,9 @@ async def withdraw_pix_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def receive_pix_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    # Garante que pix_key seja uma string, mesmo se a mensagem for vazia
+    # Garante que pix_key seja string
     pix_key = update.message.text.strip() if update.message and update.message.text else ""
 
-    # Valida a chave PIX
     if not pix_key or not is_valid_pix_key(pix_key):
         await update.message.reply_text(
             "❌ **Chave PIX inválida!**\n"
@@ -334,7 +333,6 @@ async def receive_pix_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return PIX_KEY
 
     amount_cents = context.user_data.get('pix_amount_cents')
-    # Garante que name seja uma string, nunca None
     name = context.user_data.get('pix_user_name') or "Usuário"
 
     if not amount_cents:
@@ -344,37 +342,34 @@ async def receive_pix_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     try:
-        # Verifica saldo novamente antes de qualquer ação
+        # Verifica saldo
         cursor.execute("SELECT affiliate_balance_cents FROM users WHERE user_id = ?", (user_id,))
         row = cursor.fetchone()
         if not row or row[0] < amount_cents:
             await update.message.reply_text("❌ Saldo insuficiente. Saque cancelado.")
             return ConversationHandler.END
 
-        # Converte para string e escapa caracteres especiais para MarkdownV2
+        # Prepara e envia notificação ao admin
         admin_text = (
             f"🚨 **SAQUE PIX SOLICITADO**\n\n"
-            f"👤 Usuário: {safe_name}\n"
+            f"👤 Usuário: {name}\n"
             f"🆔 ID: `{user_id}`\n"
             f"💰 Valor: **R$ {cents_to_float(amount_cents):.2f}**\n"
-            f"🔑 Chave: `{safe_key}`\n\n"
+            f"🔑 Chave: `{pix_key}`\n\n"
             f"⏰ Data: `{datetime.now().strftime('%d/%m/%Y %H:%M:%S')}`"
         )
-
-        # Tenta notificar o administrador (se falhar, não debita)
-        await context.bot.send_message(
+        try:
+            await context.bot.send_message(
                 chat_id=ADMIN_ID,
                 text=admin_text,
                 parse_mode="Markdown"
             )
         except Exception as e:
             logger.error(f"Falha ao notificar admin: {e}")
-            await update.message.reply_text(
-                "❌ Erro ao processar solicitação. Tente novamente mais tarde."
-            )
+            await update.message.reply_text("❌ Erro ao processar solicitação. Tente mais tarde.")
             return ConversationHandler.END
 
-        # Debitar saldo apenas se a notificação foi bem‑sucedida
+        # Debita saldo
         cursor.execute(
             "UPDATE users SET affiliate_balance_cents = affiliate_balance_cents - ? WHERE user_id = ? AND affiliate_balance_cents >= ?",
             (amount_cents, user_id, amount_cents)
@@ -401,10 +396,9 @@ async def receive_pix_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await update.message.reply_text("❌ Erro interno ao processar saque. Tente novamente.")
         except Exception:
-            pass   # Evita que uma falha ao enviar mensagem propague o erro
+            pass
     finally:
         conn.close()
-        # Limpeza dos dados temporários e lock
         context.user_data.pop('pix_amount_cents', None)
         context.user_data.pop('pix_user_name', None)
         if user_id in user_pix_locks:
