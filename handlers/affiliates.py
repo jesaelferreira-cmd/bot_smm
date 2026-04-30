@@ -306,9 +306,13 @@ async def withdraw_pix_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return PIX_KEY
     except Exception as e:
-        logger.error(f"Erro em withdraw_pix_start: {e}")
-        await query.message.reply_text("❌ Erro interno. Tente novamente.")
-        return ConversationHandler.END
+        conn.rollback()
+        logger.error(f"Erro no saque PIX: {e}")
+    try:
+        # Tenta enviar a mensagem de erro, mas com timeout curto e sem esperar muito
+        await update.message.reply_text("❌ Erro interno ao processar saque. Tente novamente.")
+    except Exception as reply_error:
+        logger.error(f"Falha ao enviar mensagem de erro: {reply_error}")
     finally:
         # O lock será liberado apenas quando o fluxo terminar (no receive_pix_key ou cancel_pix)
         pass
