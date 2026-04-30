@@ -319,10 +319,11 @@ async def withdraw_pix_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def receive_pix_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    pix_key = update.message.text.strip()
+    # Garante que pix_key seja uma string, mesmo se a mensagem for vazia
+    pix_key = update.message.text.strip() if update.message and update.message.text else ""
 
-    # 1. Valida a chave PIX
-    if not is_valid_pix_key(pix_key):
+    # Valida a chave PIX
+    if not pix_key or not is_valid_pix_key(pix_key):
         await update.message.reply_text(
             "❌ **Chave PIX inválida!**\n"
             "Envie uma chave válida (CPF, e-mail, telefone ou aleatória).\n"
@@ -333,7 +334,9 @@ async def receive_pix_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return PIX_KEY
 
     amount_cents = context.user_data.get('pix_amount_cents')
-    name = context.user_data.get('pix_user_name')
+    # Garante que name seja uma string, nunca None
+    name = context.user_data.get('pix_user_name') or "Usuário"
+
     if not amount_cents:
         await update.message.reply_text("❌ Sessão expirada. Inicie o saque novamente.")
         return ConversationHandler.END
@@ -341,16 +344,16 @@ async def receive_pix_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     try:
-        # 2. Verifica novamente o saldo (ainda não debitou)
+        # Verifica saldo novamente antes de qualquer ação
         cursor.execute("SELECT affiliate_balance_cents FROM users WHERE user_id = ?", (user_id,))
         row = cursor.fetchone()
         if not row or row[0] < amount_cents:
             await update.message.reply_text("❌ Saldo insuficiente. Saque cancelado.")
             return ConversationHandler.END
 
-        # 3. Prepara a notificação ao admin (usando MarkdownV2, texto com escape)
-        safe_name = escape_markdown(name, version=2)
-        safe_key = escape_markdown(pix_key, version=2)
+        # Converte para string e escapa caracteres especiais para MarkdownV2
+        safe_name = escape_markdown(str(name), version=2)
+        safe_key = escape_markdown(str(pix_key), version=2)
         admin_text = (
             f"🚨 **SAQUE PIX SOLICITADO**\n\n"
             f"👤 Usuário: {safe_name}\n"
@@ -360,7 +363,7 @@ async def receive_pix_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⏰ Data: `{datetime.now().strftime('%d/%m/%Y %H:%M:%S')}`"
         )
 
-        # 4. Tenta enviar a mensagem para o administrador
+        # Tenta notificar o administrador (se falhar, não debita)
         try:
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
@@ -368,27 +371,24 @@ async def receive_pix_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="MarkdownV2"
             )
         except Exception as e:
-            # Se falhar ao notificar o admin, NÃO DEBITA e cancela
-            logger.error(f"Falha ao notificar admin sobre saque PIX: {e}")
+            logger.error(f"Falha ao notificar admin: {e}")
             await update.message.reply_text(
-                "❌ Não foi possível processar sua solicitação no momento. Tente novamente mais tarde."
+                "❌ Erro ao processar solicitação. Tente novamente mais tarde."
             )
             return ConversationHandler.END
 
-        # 5. Agora sim, debita o saldo (atomicidade garantida)
+        # Debitar saldo apenas se a notificação foi bem‑sucedida
         cursor.execute(
             "UPDATE users SET affiliate_balance_cents = affiliate_balance_cents - ? WHERE user_id = ? AND affiliate_balance_cents >= ?",
             (amount_cents, user_id, amount_cents)
         )
         if cursor.rowcount == 0:
-            # Isso não deveria acontecer porque o saldo foi verificado, mas pode ocorrer em race condition
             await update.message.reply_text("❌ Saldo já utilizado. Saque cancelado.")
             return ConversationHandler.END
 
         conn.commit()
-        logger.info(f"SAQUE PIX realizado com sucesso: user={user_id}, amount={amount_cents}, key={pix_key}")
+        logger.info(f"SAQUE PIX confirmado: user={user_id}, amount={amount_cents}, key={pix_key}")
 
-        # 6. Confirmação para o usuário
         await update.message.reply_text(
             f"✅ **Saque solicitado com sucesso!**\n\n"
             f"💰 Valor: R$ {cents_to_float(amount_cents):.2f}\n"
@@ -401,15 +401,22 @@ async def receive_pix_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         conn.rollback()
         logger.error(f"Erro no saque PIX: {e}")
-        await update.message.reply_text("❌ Erro interno ao processar saque. Tente novamente.")
+        try:
+            await update.message.reply_text("❌ Erro interno ao processar saque. Tente novamente.")
+        except Exception:
+            pass   # Evita que uma falha ao enviar mensagem propague o erro
     finally:
         conn.close()
         # Limpeza dos dados temporários e lock
         context.user_data.pop('pix_amount_cents', None)
         context.user_data.pop('pix_user_name', None)
         if user_id in user_pix_locks:
-            user_pix_locks[user_id].release()
-            del user_pix_locks[user_id]
+            lock = user_pix_locks.pop(user_id, None)
+            if lock:
+                try:
+                    lock.release()
+                except:
+                    pass
 
     return ConversationHandler.END
 
