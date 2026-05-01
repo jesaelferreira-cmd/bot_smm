@@ -156,7 +156,8 @@ def main():
         app.add_handler(CallbackQueryHandler(balance.pix_command, pattern="^add_balance$"))
         app.add_handler(CallbackQueryHandler(start.start_command, pattern="^back_to_start$"))
         app.add_handler(CallbackQueryHandler(status.order_status_callback, pattern="^status_"))
-
+        app.add_handler(CallbackQueryHandler(affiliates.confirm_payment, pattern="^confirm_payment_"))
+        app.add_handler(CallbackQueryHandler(affiliates.cancel_payment, pattern="^cancel_payment_"))
         # =========================================================
         # 4. AFILIADOS - CONVERSATION HANDLER PARA SAQUE PIX
         # =========================================================

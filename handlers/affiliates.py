@@ -350,7 +350,8 @@ async def receive_pix_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return ConversationHandler.END
 
         # Prepara e envia notificação ao admin
-        admin_text = (
+# Prepara mensagem com botões de confirmação/cancelamento
+         admin_text = (
             f"🚨 **SAQUE PIX SOLICITADO**\n\n"
             f"👤 Usuário: {name}\n"
             f"🆔 ID: `{user_id}`\n"
@@ -358,25 +359,25 @@ async def receive_pix_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔑 Chave: `{pix_key}`\n\n"
             f"⏰ Data: `{datetime.now().strftime('%d/%m/%Y %H:%M:%S')}`"
         )
-        try:
-            await context.bot.send_message(
-                chat_id=ADMIN_ID,
-                text=admin_text,
-                parse_mode="Markdown"
-            )
-        except Exception as e:
-            logger.error(f"Falha ao notificar admin: {e}")
-            await update.message.reply_text("❌ Erro ao processar solicitação. Tente mais tarde.")
-            return ConversationHandler.END
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Confirmar Pagamento", callback_data=f"confirm_payment_{user_id}_{amount_cents}"),
+                InlineKeyboardButton("❌ Cancelar", callback_data=f"cancel_payment_{user_id}_{amount_cents}")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
 
-        # Debita saldo
-        cursor.execute(
-            "UPDATE users SET affiliate_balance_cents = affiliate_balance_cents - ? WHERE user_id = ? AND affiliate_balance_cents >= ?",
-            (amount_cents, user_id, amount_cents)
-        )
-        if cursor.rowcount == 0:
-            await update.message.reply_text("❌ Saldo já utilizado. Saque cancelado.")
-            return ConversationHandler.END
+    try:
+        await context.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=admin_text,
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
+    except Exception as e:
+        logger.error(f"Falha ao notificar admin: {e}")
+        await update.message.reply_text("❌ Erro ao processar solicitação. Tente mais tarde.")
+        return ConversationHandler.END
 
         conn.commit()
         logger.info(f"SAQUE PIX confirmado: user={user_id}, amount={amount_cents}, key={pix_key}")
@@ -444,3 +445,77 @@ pix_withdrawal_handler = ConversationHandler(
     fallbacks=[CallbackQueryHandler(cancel_pix, pattern="^cancel_pix$")],
     allow_reentry=False,  # Não permite reentrada enquanto um saque está ativo
 )
+
+async def confirm_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Callback para quando o admin confirma o pagamento do saque."""
+    query = update.callback_query
+    await query.answer("Pagamento confirmado!")
+
+    # Extrai dados do callback_data: "confirm_payment_userId_amountCents"
+    data = query.data.split("_")
+    user_id = int(data[2])
+    amount_cents = int(data[3])
+
+    # (Opcional) Registrar no banco que o pagamento foi realizado
+    # Por exemplo, criar uma tabela 'withdrawals' com status 'paid'
+    # Aqui apenas notificamos o usuário
+
+    # Mensagem para o afiliado
+    await context.bot.send_message(
+        chat_id=user_id,
+        text=(
+            f"✅ **Pagamento realizado!**\n\n"
+            f"Seu saque de **R$ {cents_to_float(amount_cents):.2f}** foi processado.\n"
+            f"O valor foi enviado para a chave PIX informada. Verifique sua conta em alguns instantes.\n\n"
+            f"Obrigado por usar o programa de afiliados da LikesPlus! 💰"
+        ),
+        parse_mode="Markdown"
+    )
+
+    # Atualiza a mensagem original do admin (remove os botões e marca como concluído)
+    await query.edit_message_text(
+        text=query.message.text + "\n\n✅ **Pagamento confirmado pelo administrador.**",
+        parse_mode="Markdown"
+    )
+
+async def cancel_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Callback para quando o admin cancela o saque (estorna o saldo do afiliado)."""
+    query = update.callback_query
+    await query.answer("Saque cancelado.")
+
+    data = query.data.split("_")
+    user_id = int(data[2])
+    amount_cents = int(data[3])
+
+    # Estorna o saldo do afiliado (devolve o que foi debitado)
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "UPDATE users SET affiliate_balance_cents = affiliate_balance_cents + ? WHERE user_id = ?",
+            (amount_cents, user_id)
+        )
+        conn.commit()
+        logger.info(f"Estorno de {amount_cents} centavos para o usuário {user_id} (saque cancelado)")
+    except Exception as e:
+        logger.error(f"Erro ao estornar saldo: {e}")
+    finally:
+        conn.close()
+
+    # Notifica o usuário sobre o cancelamento
+    await context.bot.send_message(
+        chat_id=user_id,
+        text=(
+            f"❌ **Saque cancelado!**\n\n"
+            f"O saque de **R$ {cents_to_float(amount_cents):.2f}** foi cancelado pelo administrador.\n"
+            f"O valor foi devolvido para o seu saldo de afiliado.\n\n"
+            f"Entre em contato com o suporte para mais informações."
+        ),
+        parse_mode="Markdown"
+    )
+
+    # Atualiza a mensagem do admin
+    await query.edit_message_text(
+        text=query.message.text + "\n\n❌ **Saque cancelado pelo administrador (saldo estornado).**",
+        parse_mode="Markdown"
+    )
