@@ -9,6 +9,10 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from providers.mp_api import create_pix_payment
 import mercadopago
+from database import get_connection
+
+conn = get_connection()
+cursor = conn.cursor()
 
 logger = logging.getLogger(__name__)
 

@@ -10,6 +10,10 @@ from telegram.ext import ContextTypes, ConversationHandler, CallbackQueryHandler
 from telegram.helpers import escape_markdown
 from collections import defaultdict
 from datetime import date
+from database import get_connection
+
+conn = get_connection()
+cursor = conn.cursor()
 
 logger = logging.getLogger(__name__)
 user_daily_pix = defaultdict(int)
@@ -319,7 +323,6 @@ async def withdraw_pix_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def receive_pix_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    # Garante que pix_key seja string
     pix_key = update.message.text.strip() if update.message and update.message.text else ""
 
     if not pix_key or not is_valid_pix_key(pix_key):
@@ -349,9 +352,8 @@ async def receive_pix_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Saldo insuficiente. Saque cancelado.")
             return ConversationHandler.END
 
-        # Prepara e envia notificação ao admin
-# Prepara mensagem com botões de confirmação/cancelamento
-         admin_text = (
+        # Prepara mensagem com botões de confirmação/cancelamento
+        admin_text = (
             f"🚨 **SAQUE PIX SOLICITADO**\n\n"
             f"👤 Usuário: {name}\n"
             f"🆔 ID: `{user_id}`\n"
@@ -367,17 +369,27 @@ async def receive_pix_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-    try:
-        await context.bot.send_message(
-        chat_id=ADMIN_ID,
-        text=admin_text,
-        reply_markup=reply_markup,
-        parse_mode="Markdown"
-    )
-    except Exception as e:
-        logger.error(f"Falha ao notificar admin: {e}")
-        await update.message.reply_text("❌ Erro ao processar solicitação. Tente mais tarde.")
-        return ConversationHandler.END
+        # Notifica admin (com tratamento de erro separado)
+        try:
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=admin_text,
+                reply_markup=reply_markup,
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logger.error(f"Falha ao notificar admin: {e}")
+            await update.message.reply_text("❌ Erro ao processar solicitação. Tente mais tarde.")
+            return ConversationHandler.END
+
+        # Debita saldo
+        cursor.execute(
+            "UPDATE users SET affiliate_balance_cents = affiliate_balance_cents - ? WHERE user_id = ? AND affiliate_balance_cents >= ?",
+            (amount_cents, user_id, amount_cents)
+        )
+        if cursor.rowcount == 0:
+            await update.message.reply_text("❌ Saldo já utilizado. Saque cancelado.")
+            return ConversationHandler.END
 
         conn.commit()
         logger.info(f"SAQUE PIX confirmado: user={user_id}, amount={amount_cents}, key={pix_key}")

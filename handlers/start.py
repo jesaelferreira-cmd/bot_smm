@@ -5,6 +5,10 @@ from config import DB_PATH
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 from utils.rate_limit import rate_limit
+from database import get_connection
+
+conn = get_connection()
+cursor = conn.cursor()
 
 logger = logging.getLogger(__name__)
 

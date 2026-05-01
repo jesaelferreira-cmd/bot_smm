@@ -10,6 +10,10 @@ from decimal import Decimal, ROUND_HALF_UP
 from config import DB_PATH, SMM_API_URL_1, SMM_API_KEY_1, SMM_API_URL_2, SMM_API_KEY_2, ADMIN_ID, is_admin
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
+from database import get_connection
+
+conn = get_connection()
+cursor = conn.cursor()
 
 logger = logging.getLogger(__name__)
 START_TIME = time.time()

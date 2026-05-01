@@ -5,16 +5,25 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ========== DIRETÓRIO BASE DINÂMICO ==========
-# No Railway, o código fica em /app
-# No Termux local, __file__ aponta para a pasta do config.py
 BASE_DIR = Path(__file__).resolve().parent
 
-# ========== BANCO DE DADOS ==========
-DB_PATH = BASE_DIR / "database" / "bot_smm.db"
+# ========== BANCO DE DADOS (PostgreSQL優先, SQLite fallback) ==========
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if DATABASE_URL:
+    # Modo Railway: usa PostgreSQL
+    DB_ENGINE = "postgresql"
+    DB_CONNECTION_STRING = DATABASE_URL
+    DB_PATH = None  # não usado
+else:
+    # Modo local: usa SQLite
+    DB_ENGINE = "sqlite"
+    DB_PATH = BASE_DIR / "database" / "bot_smm.db"
+    DB_CONNECTION_STRING = f"sqlite:///{DB_PATH}"
 
 # ========== LOGS ==========
 LOG_DIR = BASE_DIR / "logs"
-LOG_DIR.mkdir(exist_ok=True)          # cria a pasta se não existir
+LOG_DIR.mkdir(exist_ok=True)
 LOG_PATH = LOG_DIR / "bot.log"
 
 # ========== VARIÁVEIS DO BOT ==========
