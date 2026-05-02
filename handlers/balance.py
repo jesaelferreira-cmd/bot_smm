@@ -1,18 +1,14 @@
-import sqlite3
 import asyncio
 import logging
 import re
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
-from config import DB_PATH, MP_ACCESS_TOKEN
+from config import MP_ACCESS_TOKEN
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from providers.mp_api import create_pix_payment
 import mercadopago
 from database import get_connection
-
-conn = get_connection()
-cursor = conn.cursor()
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +16,7 @@ logger = logging.getLogger(__name__)
 user_locks = {}
 
 # ------------------------------------------------------------
-# FUNÇÃO AUXILIAR: converte centavos (int) para float com 2 casas
+# FUNÇÕES AUXILIARES
 # ------------------------------------------------------------
 async def safe_edit(query, text: str, reply_markup=None, parse_mode="Markdown"):
     """Edita mensagem com texto ou legenda, com fallback para nova mensagem."""
@@ -47,19 +43,16 @@ def float_to_cents(value: float) -> int:
 # ------------------------------------------------------------
 async def show_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    conn = None
+    conn = get_connection()
+    cursor = conn.cursor()
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=15)
-        cursor = conn.cursor()
-
         # Garante que o usuário existe (com saldo 0 em centavos)
         cursor.execute(
-            "INSERT OR IGNORE INTO users (user_id, main_balance_cents) VALUES (?, ?)",
+            "INSERT INTO users (user_id, main_balance_cents) VALUES (%s, %s) ON CONFLICT (user_id) DO NOTHING",
             (user_id, 0)
         )
         conn.commit()
-
-        cursor.execute("SELECT main_balance_cents FROM users WHERE user_id = ?", (user_id,))
+        cursor.execute("SELECT main_balance_cents FROM users WHERE user_id = %s", (user_id,))
         result = cursor.fetchone()
         balance = (result[0] if result else 0) / 100.0
 
@@ -74,8 +67,7 @@ async def show_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Erro ao exibir saldo do usuário {user_id}: {e}")
         await update.message.reply_text("❌ Erro interno ao buscar saldo. Tente mais tarde.")
     finally:
-        if conn:
-            conn.close()
+        conn.close()
 
 # ------------------------------------------------------------
 # 2. COMANDO /pix (menu ou geração de pagamento)
@@ -172,13 +164,9 @@ async def pix_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status_msg.edit_text("⚠️ Erro interno no sistema de pagamentos.")
 
 # ------------------------------------------------------------
-# 3. LOOP DE VERIFICAÇÃO DE PAGAMENTO (agora com centavos)
+# 3. LOOP DE VERIFICAÇÃO DE PAGAMENTO (com centavos)
 # ------------------------------------------------------------
 async def check_payment_loop(context: ContextTypes.DEFAULT_TYPE, user_id: int, pix_id: str, amount_cents: int):
-    """
-    Verifica a cada 30s se o PIX foi aprovado.
-    Quando aprovado, adiciona amount_cents ao main_balance_cents do usuário.
-    """
     sdk = mercadopago.SDK(str(MP_ACCESS_TOKEN))
     amount_display = cents_to_float(amount_cents)
 
@@ -189,23 +177,21 @@ async def check_payment_loop(context: ContextTypes.DEFAULT_TYPE, user_id: int, p
             status = res["response"].get("status")
 
             if status == "approved":
-                conn = sqlite3.connect(DB_PATH, timeout=15)
+                conn = get_connection()
                 cursor = conn.cursor()
                 try:
-                    cursor.execute("SELECT 1 FROM users WHERE user_id = ?", (user_id,))
+                    cursor.execute("SELECT 1 FROM users WHERE user_id = %s", (user_id,))
                     if not cursor.fetchone():
                         cursor.execute(
-                            "INSERT INTO users (user_id, main_balance_cents) VALUES (?, ?)",
+                            "INSERT INTO users (user_id, main_balance_cents) VALUES (%s, %s)",
                             (user_id, 0)
                         )
                         conn.commit()
 
-                    cursor.execute("""
-                        UPDATE users
-                        SET main_balance_cents = main_balance_cents + ?
-                        WHERE user_id = ?
-                    """, (amount_cents, user_id))
-
+                    cursor.execute(
+                        "UPDATE users SET main_balance_cents = main_balance_cents + %s WHERE user_id = %s",
+                        (amount_cents, user_id)
+                    )
                     if cursor.rowcount > 0:
                         conn.commit()
                         logger.info(f"💰 Crédito de {amount_display:.2f} (centavos: {amount_cents}) para usuário {user_id}")
@@ -230,7 +216,7 @@ async def check_payment_loop(context: ContextTypes.DEFAULT_TYPE, user_id: int, p
                         )
                     else:
                         logger.warning(f"Falha ao atualizar saldo para usuário {user_id} (linhas não afetadas)")
-                except sqlite3.Error as e:
+                except Exception as e:
                     logger.error(f"Erro SQL ao creditar saldo: {e}")
                     conn.rollback()
                 finally:
@@ -246,4 +232,3 @@ async def check_payment_loop(context: ContextTypes.DEFAULT_TYPE, user_id: int, p
             await asyncio.sleep(10)
 
     logger.info(f"⏰ Loop expirado para PIX {pix_id} (usuário {user_id}) - não confirmado em 20min")
-

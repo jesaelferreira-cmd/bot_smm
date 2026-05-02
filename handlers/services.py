@@ -1,5 +1,4 @@
 import logging
-import sqlite3
 import re
 import hashlib
 from typing import List, Tuple, Optional
@@ -7,9 +6,6 @@ from config import DB_PATH
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, ConversationHandler
 from database import get_connection
-
-conn = get_connection()
-cursor = conn.cursor()
 
 logger = logging.getLogger(__name__)
 
@@ -63,11 +59,9 @@ EMOJI_REGEX = re.compile(r'^[\U00010000-\U0010ffff\u2600-\u26ff\u2700-\u27bf]')
 # FUNÇÕES AUXILIARES
 # =========================================================
 def _get_cat_hash(cat_name: str) -> str:
-    """Gera hash curto para identificação única da categoria + provedor."""
     return hashlib.md5(cat_name.encode()).hexdigest()[:8]
 
 async def safe_edit(query, text: str, reply_markup=None, parse_mode="Markdown"):
-    """Edita mensagem com segurança, mesmo se original for foto/caption."""
     try:
         await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode=parse_mode)
         return
@@ -85,7 +79,6 @@ def detect_icon(category: str) -> str:
     return next((icon for key, icon in ICONS_MAP.items() if key in cat_lower), "🚀")
 
 def normalize_category(category: str) -> str:
-    """Apenas para exibição (adiciona emoji), não altera o nome real."""
     category = category.strip()
     if EMOJI_REGEX.match(category):
         return category
@@ -96,234 +89,108 @@ def is_valid_category(category: str) -> bool:
     cat_lower = category.lower().strip()
     if not cat_lower or len(cat_lower) < 2:
         return False
-    # if any(term in cat_lower for term in FORBIDDEN_TERMS):
-    #     return False
     return True
 
 def get_categories() -> List[str]:
+    conn = get_connection()
+    cursor = conn.cursor()
     try:
-        with sqlite3.connect(str(DB_PATH)) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT DISTINCT category, provider
-                FROM services
-                WHERE rate > 0
-                ORDER BY category, provider
-            """)
-            rows = cursor.fetchall()
-
-        # Palavras-chave proibidas (categorias que não devem aparecer)
+        cursor.execute("""
+            SELECT DISTINCT category, provider
+            FROM services
+            WHERE rate > 0
+            ORDER BY category, provider
+        """)
+        rows = cursor.fetchall()
         forbidden_keywords = ["privado para api", "privado para aplicativo", "não utilize"]
-
         result = []
         for cat, prov in rows:
             if not cat or len(cat.strip()) < 2:
                 continue
-
             cat_lower = cat.lower()
-            # Pula categorias proibidas
             if any(keyword in cat_lower for keyword in forbidden_keywords):
                 continue
-
             clean_cat = cat.strip()
-
-            # Tenta extrair a plataforma do próprio nome da categoria
-            # (já que usamos o formato "Plataforma - Tipo")
-            platform_from_cat = None
-            if " - " in clean_cat:
-                platform_from_cat = clean_cat.split(" - ")[0]
-
-            # Se a plataforma foi identificada, usa o ícone correspondente
-            platform_hint = ""
-            if platform_from_cat:
-                platform_lower = platform_from_cat.lower()
-                if "instagram" in platform_lower:
-                    platform_hint = "📸"
-                elif "tiktok" in platform_lower:
-                    platform_hint = "🎵"
-                elif "youtube" in platform_lower:
-                    platform_hint = "▶️"
-                elif "facebook" in platform_lower:
-                    platform_hint = "🚀"
-                elif "kwai" in platform_lower:
-                    platform_hint = "🎥"
-                elif "telegram" in platform_lower:
-                    platform_hint = "✈️"
-                elif "x/twitter" in platform_lower or "twitter" in platform_lower:
-                    platform_hint = "🐦"
-                elif "whatsapp" in platform_lower:
-                    platform_hint = "📞"
-                elif "spotify" in platform_lower:
-                    platform_hint = "🎧"
-                elif "twitch" in platform_lower:
-                    platform_hint = "🟣"
-                elif "pinterest" in platform_lower:
-                    platform_hint = "📌"
-                elif "linkedin" in platform_lower:
-                    platform_hint = "💼"
-                elif "reddit" in platform_lower:
-                    platform_hint = "🤖"
-                elif "bluesky" in platform_lower:
-                    platform_hint = "🦋"
-                elif "threads" in platform_lower:
-                    platform_hint = "💬"
-                elif "snackvideo" in platform_lower:
-                    platform_hint = "🍿"
-                elif "tidal" in platform_lower:
-                    platform_hint = "🌊"
-                elif "dribbble" in platform_lower:
-                    platform_hint = "🏀"
-                elif "rumble" in platform_lower:
-                    platform_hint = "📹"
-                elif "coinmarketcap" in platform_lower:
-                    platform_hint = "📊"
-                elif "google" in platform_lower:
-                    platform_hint = "🌐"
-                elif "site" in platform_lower or "tráfego" in platform_lower:
-                    platform_hint = "🌍"
-                elif "kick" in platform_lower:
-                    platform_hint = "🥊"
-                elif "discord" in platform_lower:
-                    platform_hint = "💬"
-                elif "trovo" in platform_lower:
-                    platform_hint = "👾"
-                elif "denúncias" in platform_lower:
-                    platform_hint = "🚫"
-                else:
-                    platform_hint = "🚀"
-            else:
-                # Fallback: busca o primeiro serviço da categoria para inferir plataforma
-                cursor2 = conn.cursor()
-                cursor2.execute(
-                    "SELECT name FROM services WHERE category = ? AND provider = ? LIMIT 1",
-                    (cat, prov)
-                )
-                serv = cursor2.fetchone()
-                if serv:
-                    name_lower = serv[0].lower()
-                    if "instagram" in name_lower:
-                        platform_hint = "📸"
-                    elif "tiktok" in name_lower:
-                        platform_hint = "🎵"
-                    elif "youtube" in name_lower:
-                        platform_hint = "▶️"
-                    elif "facebook" in name_lower:
-                        platform_hint = "👥"
-                    elif "kwai" in name_lower:
-                        platform_hint = "🎥"
-                    elif "telegram" in name_lower:
-                        platform_hint = "✈️"
-                    else:
-                        platform_hint = "🚀"
-                else:
-                    platform_hint = "🚀"
-
-            display = f"{platform_hint} {clean_cat} [C{prov}]".strip()
+            # Tenta extrair plataforma
+            platform = "🚀"
+            if "instagram" in cat_lower:
+                platform = "📸"
+            elif "tiktok" in cat_lower:
+                platform = "🎵"
+            elif "youtube" in cat_lower:
+                platform = "▶️"
+            elif "facebook" in cat_lower:
+                platform = "👥"
+            elif "kwai" in cat_lower:
+                platform = "🎥"
+            elif "telegram" in cat_lower:
+                platform = "✈️"
+            elif "twitter" in cat_lower or "x" in cat_lower:
+                platform = "🐦"
+            elif "whatsapp" in cat_lower:
+                platform = "📞"
+            elif "twitch" in cat_lower:
+                platform = "🟣"
+            elif "pinterest" in cat_lower:
+                platform = "📌"
+            elif "linkedin" in cat_lower:
+                platform = "💼"
+            elif "reddit" in cat_lower:
+                platform = "🤖"
+            elif "bluesky" in cat_lower:
+                platform = "🦋"
+            elif "threads" in cat_lower:
+                platform = "💬"
+            elif "discord" in cat_lower:
+                platform = "🎮"
+            display = f"{platform} {clean_cat} [C{prov}]".strip()
             result.append(display)
-
         return result
     except Exception as e:
         logger.error(f"Erro em get_categories: {e}")
         return []
-
-def get_services(category_name: str, limit: int = 15) -> List[Tuple]:
-    """
-    Busca serviços de uma categoria em TODOS os provedores.
-    Mantida para compatibilidade com buttons.py e outras partes antigas.
-    """
-    try:
-        with sqlite3.connect(str(DB_PATH)) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT service_id, name, rate, min, max, provider
-                FROM services
-                WHERE category = ? AND rate > 0
-                ORDER BY rate ASC
-                LIMIT ?
-            """, (category_name, limit))
-            services = cursor.fetchall()
-        logger.info(f"[get_services] Categoria '{category_name}': {len(services)} serviços (todos provedores)")
-        return services
-    except Exception as e:
-        logger.error(f"Erro em get_services para {category_name}: {e}")
-        return []
+    finally:
+        conn.close()
 
 def get_services_by_category_and_provider(category_name: str, provider: int, limit: int = 15) -> List[Tuple]:
-    """
-    Busca serviços de uma categoria específica de UM provedor.
-    Realiza correspondência flexível (case-insensitive, ignora emojis e espaços).
-    """
+    conn = get_connection()
+    cursor = conn.cursor()
     try:
-        with sqlite3.connect(str(DB_PATH)) as conn:
-            cursor = conn.cursor()
-
-            # Função para normalizar texto (remove emojis, símbolos, espaços extras)
-            def normalize_for_match(text: str) -> str:
-                # Remove caracteres não ASCII (emojis, símbolos)
-                text = re.sub(r'[^\x00-\x7F]+', '', text)
-                # Remove pontuação e mantém apenas letras, números e espaços
-                text = re.sub(r'[^\w\s]', '', text)
-                # Normaliza espaços e converte para minúsculas
-                return ' '.join(text.lower().split())
-
-            clean_input = normalize_for_match(category_name)
-
-            # Obtém todas as categorias distintas do provedor
-            cursor.execute("""
-                SELECT DISTINCT category FROM services
-                WHERE provider = ? AND rate > 0
-            """, (provider,))
-            all_categories = [row[0] for row in cursor.fetchall()]
-
-            # Encontra a categoria que melhor corresponde
-            matched_category = None
-            for cat in all_categories:
-                if normalize_for_match(cat) == clean_input:
-                    matched_category = cat
-                    break
-
-            if not matched_category:
-                logger.warning(f"Nenhuma correspondência para categoria '{category_name}' no provedor {provider}")
-                return []
-
-            # Busca os serviços com o nome exato da categoria encontrada
-            cursor.execute("""
-                SELECT service_id, name, rate, min, max
-                FROM services
-                WHERE category = ? AND provider = ? AND rate > 0
-                ORDER BY rate ASC
-                LIMIT ?
-            """, (matched_category, provider, limit))
-            services = cursor.fetchall()
-
-        logger.info(f"Serviços encontrados para '{matched_category}' (C{provider}): {len(services)}")
+        cursor.execute("""
+            SELECT service_id, name, rate, min, max
+            FROM services
+            WHERE category = %s AND provider = %s AND rate > 0
+            ORDER BY rate ASC
+            LIMIT %s
+        """, (category_name, provider, limit))
+        services = cursor.fetchall()
         return services
     except Exception as e:
         logger.error(f"Erro ao buscar serviços para {category_name} C{provider}: {e}")
         return []
+    finally:
+        conn.close()
 
-def get_service_by_id(service_id: str):
-    """Retorna os dados completos de um serviço pelo ID (todos os provedores)."""
+def get_service_by_id(service_id: str) -> Optional[Tuple]:
+    conn = get_connection()
+    cursor = conn.cursor()
     try:
-        with sqlite3.connect(str(DB_PATH)) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT service_id, name, rate, min, max, category, provider, description
-                FROM services
-                WHERE service_id = ?
-            """, (service_id,))
-            return cursor.fetchone()
+        cursor.execute("""
+            SELECT service_id, name, rate, min, max, category, provider, description
+            FROM services
+            WHERE service_id = %s
+        """, (service_id,))
+        return cursor.fetchone()
     except Exception as e:
         logger.error(f"Erro ao buscar serviço {service_id}: {e}")
         return None
+    finally:
+        conn.close()
 
 # =========================================================
 # HANDLERS
 # =========================================================
-async def list_services(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 0):
-    """
-    Exibe o menu de categorias com paginação.
-    """
+async def list_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if query:
         try:
@@ -339,78 +206,38 @@ async def list_services(update: Update, context: ContextTypes.DEFAULT_TYPE, page
             await update.message.reply_text("⚠️ Nenhum serviço disponível. Tente mais tarde.")
         return ConversationHandler.END
 
-    # Configuração da paginação
-    ITEMS_PER_PAGE = 20  # 10 linhas de 2 categorias
-    total_pages = (len(categories) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE
-    page = max(0, min(page, total_pages - 1))
-
-    start_idx = page * ITEMS_PER_PAGE
-    end_idx = min(start_idx + ITEMS_PER_PAGE, len(categories))
-    page_categories = categories[start_idx:end_idx]
-
-    # Inicializa o mapa de hashes no bot_data
     if 'cat_hash_map' not in context.bot_data:
         context.bot_data['cat_hash_map'] = {}
     cat_hash_map = context.bot_data['cat_hash_map']
 
     PROVIDER_PATTERN = re.compile(r'\s*\[C(\d+)\]\s*$')
-
     keyboard = []
-    for i in range(0, len(page_categories), 2):
-        display_name = page_categories[i]
-
+    for i in range(0, len(categories), 2):
+        display_name = categories[i]
         match = PROVIDER_PATTERN.search(display_name)
         if not match:
-            logger.warning(f"⚠️ Categoria ignorada (regex não casou): '{display_name}'")
             continue
-
         prov = int(match.group(1))
         real_cat = PROVIDER_PATTERN.sub('', display_name).strip()
-
-        logger.info(f"✅ Processando categoria: '{display_name}' -> real='{real_cat}' prov={prov}")
-
         hash1 = _get_cat_hash(display_name)
         callback_data1 = f"cat_{hash1}"
         cat_hash_map[callback_data1] = (real_cat, prov)
         row = [InlineKeyboardButton(display_name, callback_data=callback_data1)]
-
-        # Segunda categoria da linha
-        if i + 1 < len(page_categories):
-            display_name2 = page_categories[i+1]
-
+        if i + 1 < len(categories):
+            display_name2 = categories[i+1]
             match2 = PROVIDER_PATTERN.search(display_name2)
-            if not match2:
-                logger.warning(f"⚠️ Categoria ignorada (regex não casou): '{display_name2}'")
-                continue
-
-            prov2 = int(match2.group(1))
-            real_cat2 = PROVIDER_PATTERN.sub('', display_name2).strip()
-
-            logger.info(f"✅ Processando categoria: '{display_name2}' -> real='{real_cat2}' prov={prov2}")
-
-            hash2 = _get_cat_hash(display_name2)
-            callback_data2 = f"cat_{hash2}"
-            cat_hash_map[callback_data2] = (real_cat2, prov2)
-            row.append(InlineKeyboardButton(display_name2, callback_data=callback_data2))
-
+            if match2:
+                prov2 = int(match2.group(1))
+                real_cat2 = PROVIDER_PATTERN.sub('', display_name2).strip()
+                hash2 = _get_cat_hash(display_name2)
+                callback_data2 = f"cat_{hash2}"
+                cat_hash_map[callback_data2] = (real_cat2, prov2)
+                row.append(InlineKeyboardButton(display_name2, callback_data=callback_data2))
         keyboard.append(row)
-
-    # Botões de navegação
-    nav_buttons = []
-    if page > 0:
-        nav_buttons.append(InlineKeyboardButton("« Anterior", callback_data=f"catpage_{page-1}"))
-    if page < total_pages - 1:
-        nav_buttons.append(InlineKeyboardButton("Próximo »", callback_data=f"catpage_{page+1}"))
-    if nav_buttons:
-        keyboard.append(nav_buttons)
 
     keyboard.append([InlineKeyboardButton("🏠 Voltar ao Menu Principal", callback_data="back_to_start")])
     reply_markup = InlineKeyboardMarkup(keyboard)
-
-    text = f"📦 **ESCOLHA UMA CATEGORIA:**\n_(Página {page+1}/{total_pages})_"
-
-    # Armazena a página atual no user_data para possível retorno
-    context.user_data['current_category_page'] = page
+    text = "📦 **ESCOLHA UMA CATEGORIA:**"
 
     if query:
         await safe_edit(query, text, reply_markup)
@@ -419,7 +246,6 @@ async def list_services(update: Update, context: ContextTypes.DEFAULT_TYPE, page
     return SELECTING_SERVICE
 
 async def category_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Exibe os serviços disponíveis para a categoria + provedor selecionados."""
     query = update.callback_query
     if query:
         try:
@@ -430,42 +256,26 @@ async def category_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cat_hash_map = context.bot_data.get('cat_hash_map', {})
     info = cat_hash_map.get(query.data)
     if not info:
-        logger.warning(f"Callback {query.data} não encontrado no cat_hash_map")
         await safe_edit(query, "❌ Categoria inválida. Use /comprar novamente.", None)
         return SELECTING_SERVICE
 
     real_category, provider = info
-    logger.info(f"Categoria selecionada: '{real_category}' (C{provider})")
-
     services = get_services_by_category_and_provider(real_category, provider)
-
     if not services:
-        logger.warning(f"Nenhum serviço encontrado para {real_category} C{provider}")
-        await safe_edit(query, f"❌ Nenhum serviço disponível em **{real_category} [C{provider}]** no momento.", None)
+        await safe_edit(query, "❌ Nenhum serviço disponível nesta categoria.", None)
         return SELECTING_SERVICE
 
     keyboard = []
     for s in services:
-        # s[1] = name, s[2] = rate
         btn_text = f"{s[1]} - R$ {s[2]:.2f}"
         keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"serv_{s[0]}")])
-
     keyboard.append([InlineKeyboardButton("⬅️ Voltar para Categorias", callback_data="back_to_categories")])
     reply_markup = InlineKeyboardMarkup(keyboard)
     text = f"🚀 **SERVIÇOS: {real_category} [C{provider}]**"
-
     await safe_edit(query, text, reply_markup)
     return SELECTING_SERVICE
 
-async def category_page_nav(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Navegação entre páginas de categorias."""
-    query = update.callback_query
-    await query.answer()
-    page = int(query.data.split('_')[1])
-    return await list_services(update, context, page=page)
-
 async def receive_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Recebe a escolha de um serviço específico e mostra detalhes."""
     query = update.callback_query
     await query.answer()
     service_id = query.data.replace("serv_", "")
@@ -474,13 +284,12 @@ async def receive_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit(query, "❌ Serviço não encontrado.", None)
         return SELECTING_SERVICE
 
-    # Armazena dados do serviço no user_data
     context.user_data["service_id"] = service[0]
     context.user_data["service_name"] = service[1]
     context.user_data["rate"] = float(service[2])
     context.user_data["min"] = int(service[3])
     context.user_data["max"] = int(service[4])
-    context.user_data["provider_id"] = service[6]  # índice 6 = provider
+    context.user_data["provider_id"] = service[6]
     context.user_data["description"] = service[7] if len(service) > 7 else ""
 
     desc_text = context.user_data["description"]
@@ -494,7 +303,6 @@ async def receive_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📝 **Descrição:** {desc_text}\n\n"
         f"❓ Deseja comprar este serviço?"
     )
-
     keyboard = [
         [
             InlineKeyboardButton("✅ Sim, escolher quantidade", callback_data="proceed_quantity"),
@@ -502,15 +310,11 @@ async def receive_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-
-    # Salva a categoria original para possível volta
     context.user_data["service_category"] = service[5] if len(service) > 5 else ""
-
     await safe_edit(query, text, reply_markup)
     return WAIT_CONFIRM_PRICE
 
 async def proceed_to_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Solicita ao usuário a quantidade desejada."""
     query = update.callback_query
     await query.answer()
     text = (
@@ -522,7 +326,6 @@ async def proceed_to_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE
     return ASKING_QUANTITY
 
 async def receive_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Valida a quantidade digitada e calcula o preço total."""
     user_data = context.user_data
     text_input = update.message.text.strip()
     if not text_input.isdigit():
@@ -537,7 +340,6 @@ async def receive_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     service_min = user_data.get('min', 0)
     service_max = user_data.get('max', 999999)
-
     if quantity < service_min or quantity > service_max:
         await update.message.reply_text(
             f"❌ **Quantidade Inválida!**\nMínimo: **{service_min}** | Máximo: **{service_max}**\nDigite um valor válido:"
@@ -566,17 +368,14 @@ async def receive_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return WAIT_CONFIRM_PRICE
 
 async def confirm_price_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Avança para solicitação do link."""
     query = update.callback_query
     await query.answer()
     await safe_edit(query, "🔗 **Envie o link do Perfil ou Post:**\n_(Certifique-se que o perfil está público)_")
     return ASKING_LINK
 
 async def receive_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Recebe o link e pede confirmação final."""
     link = update.message.text.strip()
     context.user_data['link'] = link
-
     keyboard = [
         [InlineKeyboardButton("🚀 FINALIZAR PEDIDO", callback_data="execute_order")],
         [InlineKeyboardButton("❌ CANCELAR", callback_data="cancel_order")]
@@ -594,29 +393,23 @@ async def receive_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return CONFIRMING
 
 async def execute_order_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Encaminha para a função de finalização do pedido."""
     query = update.callback_query
     await query.answer("Processando pedido...")
-    # Importação local para evitar circularidade
     from handlers.orders import confirm_order
     return await confirm_order(update, context)
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cancela a operação atual."""
     await update.message.reply_text("❌ Ação cancelada com sucesso.")
     return ConversationHandler.END
 
 async def back_to_categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Retorna ao menu de categorias, lembrando a última página."""
     query = update.callback_query
     if query:
         await query.answer()
-        page = context.user_data.get('current_category_page', 0)
-        return await list_services(update, context, page=page)
+        return await list_services(update, context)
     return ConversationHandler.END
 
 async def cancel_to_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cancela pedido e volta às categorias."""
     query = update.callback_query
     await query.answer("Pedido cancelado.")
     return await back_to_categories(update, context)

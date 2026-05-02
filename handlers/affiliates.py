@@ -1,533 +1,558 @@
-import sqlite3
+import asyncio
+import requests
+import time
+import subprocess
+import os
 import logging
-import re
-from asyncio import Lock
-from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime
-from config import DB_PATH, ADMIN_ID
+from decimal import Decimal, ROUND_HALF_UP
+from config import SMM_API_URL_1, SMM_API_KEY_1, SMM_API_URL_2, SMM_API_KEY_2, ADMIN_ID, is_admin
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, ConversationHandler, CallbackQueryHandler, MessageHandler, filters
-from telegram.helpers import escape_markdown
-from collections import defaultdict
-from datetime import date
+from telegram.ext import ContextTypes
 from database import get_connection
 
-conn = get_connection()
-cursor = conn.cursor()
-
 logger = logging.getLogger(__name__)
-user_daily_pix = defaultdict(int)
-last_reset_date = date.today()
+START_TIME = time.time()
 
 # =========================================================
-# CONFIGURAÇÕES
+# FUNÇÕES AUXILIARES (centavos)
 # =========================================================
-
-# Estados para o ConversationHandler do saque PIX
-PIX_KEY = 1
-
-# Lock para evitar double spending no saque PIX
-user_pix_locks = {}
-
-# =========================================================
-# FUNÇÕES AUXILIARES
-# =========================================================
-async def safe_edit(query, text: str, reply_markup=None, parse_mode="Markdown"):
-    """Edita mensagem com texto ou legenda, com fallback para nova mensagem."""
-    try:
-        await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode=parse_mode)
-        return
-    except Exception:
-        pass
-    try:
-        await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode=parse_mode)
-        return
-    except Exception:
-        pass
-    await query.message.reply_text(text=text, reply_markup=reply_markup, parse_mode=parse_mode)
-
 def cents_to_float(cents: int) -> float:
     return round(cents / 100.0, 2)
 
 def float_to_cents(value: float) -> int:
     return int(Decimal(str(value)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP) * 100)
 
-def is_valid_pix_key(key: str) -> bool:
-    """Valida chave PIX (CPF, e-mail, telefone, UUID)"""
-    key = key.strip()
-    # CPF (11 dígitos, pode ter pontos e traços)
-    if re.match(r'^\d{3}\.?\d{3}\.?\d{3}-?\d{2}$', key):
-        return True
-    # E-mail simples
-    if re.match(r'^[^@]+@[^@]+\.[^@]+$', key):
-        return True
-    # Telefone (com ou sem DDD, com ou sem 9)
-    if re.match(r'^\(?\d{2}\)?\s?\d{4,5}-?\d{4}$', key):
-        return True
-    # Chave aleatória (UUID)
-    if re.match(r'^[a-f0-9]{8}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{12}$', key, re.I):
-        return True
-    return False
-
-async def withdraw_pix_start(update, context):
-    user_id = update.effective_user.id
-    
-    # Reset diário
-    today = date.today()
-    if today != last_reset_date:
-        user_daily_pix.clear()
-        last_reset_date = today
-    
-    # Limite de 3 saques PIX por dia
-    if user_daily_pix[user_id] >= 3:
-        await query.message.reply_text("❌ Você atingiu o limite de 3 saques PIX por dia. Tente amanhã.")
-        return ConversationHandler.END
-    
-    user_daily_pix[user_id] += 1
-
-# =========================================================
-# CENTRAL DE AFILIADOS
-# =========================================================
-async def show_affiliates(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    bot_username = (await context.bot.get_me()).username
-
-    query = update.callback_query
-    if query:
-        await query.answer()
-
-    conn = sqlite3.connect(DB_PATH)
+def get_admin_stats():
+    conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT affiliate_balance_cents FROM users WHERE user_id = ?", (user_id,))
-    res = cursor.fetchone()
-    balance_cents = res[0] if res else 0
-    balance_str = cents_to_float(balance_cents)
-
-    cursor.execute("SELECT COUNT(*) FROM users WHERE referred_by = ?", (user_id,))
-    total_refs = cursor.fetchone()[0]
-
-    # --- TOTAL JÁ GANHO (se existir tabela commissions) ---
-    total_earned_str = "📊 em breve"
-    try:
-        cursor.execute("SELECT SUM(commission_cents) FROM commissions WHERE user_id = ?", (user_id,))
-        earned_cents = cursor.fetchone()[0]
-        if earned_cents is not None:
-            total_earned_str = f"R$ {cents_to_float(earned_cents):.2f}"
-    except sqlite3.OperationalError:
-        # Tabela commissions não existe ainda
-        pass
+    cursor.execute("SELECT COUNT(*) FROM users")
+    users = cursor.fetchone()[0]
+    cursor.execute("""
+        SELECT COUNT(*), COALESCE(SUM(amount_cents), 0)
+        FROM orders
+        WHERE status NOT IN ('Cancelado', 'Estornado', 'Canceled', 'Cancelled')
+    """)
+    sales, total_cents = cursor.fetchone()
     conn.close()
+    money = total_cents / 100.0
+    return users, sales, money
 
-    link_convite = f"https://t.me/{bot_username}?start={user_id}"
-    safe_link = link_convite
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        logger.warning(f"Acesso negado ao painel para {user_id}")
+        return
 
-    texto = (
-        "🤝 **PROGRAMA DE AFILIADOS LIKESPLUS**\n\n"
-        "💰 **Ganhe saldo GRÁTIS indicando seus amigos!** 💰\n\n"
-        "• Ser afiliado é a melhor forma de ganhar saldo sem custo.\n"
-        "• Você recebe **10% de cada recarga** do seu indicado.\n"
-        "• **Saques via PIX** (mínimo R$30) ou **resgate para saldo do bot** (mínimo R$5).\n"
-        "• Ganhos ilimitados! 🚀\n\n"
-        f"👥 **Indicados ativos:** `{total_refs}`\n"
-        f"💰 **Saldo de Comissão disponível:** `R$ {balance_str:.2f}`\n"
-        f"🏆 **Total já ganho:** `{total_earned_str}`\n\n"
-        "🔗 **Seu link exclusivo:**\n"
-        f"`{safe_link}`\n\n"
-        "📢 Compartilhe seu link e comece a lucrar!"
+    users, sales, money = get_admin_stats()
+
+    def get_bal(url, key):
+        if not url or not key:
+            return "Offline ❌"
+        try:
+            r = requests.post(url, data={'key': key, 'action': 'balance'}, timeout=10)
+            data = r.json()
+            return f"{data.get('balance', '0')} {data.get('currency', 'BRL')}"
+        except Exception as e:
+            logger.error(f"Erro ao obter saldo do fornecedor: {e}")
+            return "Offline ❌"
+
+    bal1 = get_bal(SMM_API_URL_1, SMM_API_KEY_1)
+    bal2 = get_bal(SMM_API_URL_2, SMM_API_KEY_2)
+
+    uptime_seconds = int(time.time() - START_TIME)
+    days = uptime_seconds // 86400
+    hours = (uptime_seconds % 86400) // 3600
+    minutes = (uptime_seconds % 3600) // 60
+    uptime_str = f"{days}d {hours}h {minutes}m" if days > 0 else f"{hours}h {minutes}m"
+
+    msg = (
+        f"👑 **PAINEL ADMINISTRATIVO - LIKESPLUS**\n\n"
+        f"⏱ **Uptime:** `{uptime_str}`\n"
+        f"👥 **Usuários:** `{users}`\n"
+        f"🛒 **Vendas:** `{sales}`\n"
+        f"💰 **Faturamento:** `R$ {money:.2f}`\n\n"
+        f"🏦 **Saldo Fornecedor 1:** `{bal1}`\n"
+        f"🏦 **Saldo Fornecedor 2:** `{bal2}`\n\n"
+        f"⚙️ **Comandos Rápidos:**\n"
+        f"📈 `/margem 1.5` (Define 50% de lucro)\n"
+        f"📢 `/promo 0.20` (Dá 20% de desconto temporário)\n"
+        f"🔄 `/atualizar` (Sincroniza serviços)"
+    )
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+# =========================================================
+# 2. MARGEM
+# =========================================================
+async def set_margin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    try:
+        valor = float(context.args[0])
+        if valor <= 0:
+            raise ValueError
+        context.bot_data['margin'] = valor
+
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value REAL)")
+        cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('margem', %s)", (valor,))
+        conn.commit()
+        conn.close()
+
+        await update.message.reply_text(f"🚀 **Margem alterada para {valor}x.**\nRode `/atualizar` para sincronizar.")
+    except:
+        await update.message.reply_text("❌ Use: `/margem 2.0` (ex: 2.0 = 100% de lucro)")
+
+# =========================================================
+# 3. PROMOÇÃO
+# =========================================================
+async def set_promo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    try:
+        valor = float(context.args[0])
+        if not (0 <= valor <= 1):
+            raise ValueError
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value REAL)")
+        cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('promo', %s)", (valor,))
+        conn.commit()
+        conn.close()
+        await update.message.reply_text(f"🎁 Promoção de {valor*100:.0f}% gravada! Rode `/atualizar`.")
+    except:
+        await update.message.reply_text("❌ Use: `/promo 0.15` (para 15% de desconto)")
+
+# =========================================================
+# 4. ATUALIZAR SERVIÇOS (chama update_db.py)
+# =========================================================
+async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+
+    await update.message.reply_text("⏳ Atualizando serviços e verificando banco de dados...")
+
+    try:
+        script_path = os.path.join(os.path.dirname(__file__), '..', 'update_db.py')
+        result = subprocess.run(["python", script_path], capture_output=True, text=True, timeout=120)
+        if result.returncode == 0:
+            await update.message.reply_text("✅ Banco de dados e serviços atualizados com sucesso!")
+            logger.info(f"Update DB output: {result.stdout}")
+        else:
+            await update.message.reply_text(f"❌ Erro na atualização. Verifique logs.\n{result.stderr[:200]}")
+    except Exception as e:
+        logger.error(f"Falha ao executar update_db: {e}")
+        await update.message.reply_text(f"❌ Erro ao atualizar: {str(e)}")
+
+# =========================================================
+# 5. BROADCAST
+# =========================================================
+async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Apenas o administrador pode usar este comando.")
+        return
+
+    text_content = None
+    photo_file_id = None
+    message = update.message
+
+    if context.args:
+        text_content = " ".join(context.args)
+
+    if message.reply_to_message and message.reply_to_message.photo:
+        photo_file_id = message.reply_to_message.photo[-1].file_id
+        if not text_content and message.reply_to_message.caption:
+            text_content = message.reply_to_message.caption
+    elif message.photo:
+        photo_file_id = message.photo[-1].file_id
+        if message.caption and not text_content:
+            text_content = message.caption
+
+    if not text_content and not photo_file_id:
+        await update.message.reply_text(
+            "⚠️ Use: `/bc Sua mensagem aqui`\nOu responda a uma foto com `/bc` (legenda opcional).",
+            parse_mode="Markdown"
+        )
+        return
+
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_id FROM users")
+        usuarios = cursor.fetchall()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Erro ao acessar banco para broadcast: {e}")
+        await update.message.reply_text("❌ Erro ao buscar lista de usuários.")
+        return
+
+    total = len(usuarios)
+    if total == 0:
+        await update.message.reply_text("📭 Nenhum usuário cadastrado.")
+        return
+
+    sucesso = 0
+    falha = 0
+    aviso = await update.message.reply_text(f"📢 Iniciando transmissão para {total} usuários...")
+
+    for user in usuarios:
+        user_id = user[0]
+        try:
+            if photo_file_id:
+                await context.bot.send_photo(
+                    chat_id=user_id,
+                    photo=photo_file_id,
+                    caption=text_content if text_content else None,
+                    parse_mode="Markdown" if text_content else None
+                )
+            else:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=text_content,
+                    parse_mode="Markdown"
+                )
+            sucesso += 1
+        except Exception as e:
+            falha += 1
+            logger.debug(f"Falha ao enviar para {user_id}: {e}")
+        await asyncio.sleep(0.05)
+
+    await aviso.edit_text(
+        f"✅ **Transmissão Finalizada!**\n\n🟢 Sucesso: {sucesso}\n🔴 Falhas: {falha}",
+        parse_mode="Markdown"
     )
 
-    keyboard = [
-        [InlineKeyboardButton("🛒 Resgatar para Saldo Bot", callback_data="aff_withdraw_bot")],
-        [InlineKeyboardButton("🏦 Sacar via PIX (Dinheiro)", callback_data="aff_withdraw_pix")],
-        [InlineKeyboardButton("👥 Ver meus indicados", callback_data="aff_my_referrals")],
-        [InlineKeyboardButton("🏠 Voltar ao Menu", callback_data="back_to_start")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    if query:
-        try:
-            await query.edit_message_text(texto, reply_markup=reply_markup, parse_mode="Markdown")
-        except Exception:
-            try:
-                await query.edit_message_caption(caption=texto, reply_markup=reply_markup, parse_mode="Markdown")
-            except Exception:
-                await query.message.reply_text(texto, reply_markup=reply_markup, parse_mode="Markdown")
-    else:
-        await update.message.reply_text(texto, reply_markup=reply_markup, parse_mode="Markdown")
-
 # =========================================================
-# VER MEUS INDICADOS
+# 6. SET BALANCE (centavos)
 # =========================================================
-async def my_referrals(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Exibe lista de usuários que o usuário indicou"""
-    query = update.callback_query
-    if query:
-        await query.answer()
-        user_id = update.effective_user.id
-    else:
-        user_id = update.effective_user.id
-
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT user_id, first_name, username, created_at
-        FROM users
-        WHERE referred_by = ?
-        ORDER BY created_at DESC
-        LIMIT 10
-    """, (user_id,))
-    rows = cursor.fetchall()
-    conn.close()
-
-    if not rows:
-        texto = "📭 Você ainda não indicou nenhum usuário.\n\nCompartilhe seu link e comece a ganhar!"
-        keyboard = [[InlineKeyboardButton("⬅️ Voltar", callback_data="affiliates")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        if query:
-            try:
-                await query.edit_message_text(texto, reply_markup=reply_markup, parse_mode="Markdown")
-            except Exception:
-                try:
-                    await query.edit_message_caption(caption=texto, reply_markup=reply_markup, parse_mode="Markdown")
-                except Exception:
-                    await query.message.reply_text(texto, reply_markup=reply_markup, parse_mode="Markdown")
-        else:
-            await update.message.reply_text(texto, reply_markup=reply_markup, parse_mode="Markdown")
+async def set_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Apenas o administrador pode usar este comando.")
         return
 
-    texto = "👥 **SEUS INDICADOS (últimos 10)**\n\n"
-    for row in rows:
-        uid, name, username, date = row
-        data_formatada = date[:10] if date else "data desconhecida"
-        nome_exib = name if name else f"User {uid}"
-        if username:
-            texto += f"• [{nome_exib}](https://t.me/{username}) – `{data_formatada}`\n"
-        else:
-            texto += f"• {nome_exib} – `{data_formatada}`\n"
-    
-    texto += "\n✅ *A cada recarga deles, você ganha 10% de comissão!*"
-
-    keyboard = [[InlineKeyboardButton("⬅️ Voltar", callback_data="affiliates")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    if query:
-        try:
-            await query.edit_message_text(texto, reply_markup=reply_markup, parse_mode="Markdown")
-        except Exception:
-            try:
-                await query.edit_message_caption(caption=texto, reply_markup=reply_markup, parse_mode="Markdown")
-            except Exception:
-                await query.message.reply_text(texto, reply_markup=reply_markup, parse_mode="Markdown")
-    else:
-        await update.message.reply_text(texto, reply_markup=reply_markup, parse_mode="Markdown")
-
-# =========================================================
-# SAQUE PARA SALDO DO BOT
-# =========================================================
-async def withdraw_to_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    if not query:
+    if len(context.args) < 2:
+        await update.message.reply_text("⚠️ Use: `/setbalance ID VALOR` (ex: `/setbalance 123456 50.00`)", parse_mode="Markdown")
         return
-    await query.answer()
-    user_id = update.effective_user.id
-
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("SELECT affiliate_balance_cents FROM users WHERE user_id = ?", (user_id,))
-        res = cursor.fetchone()
-        balance_cents = res[0] if res else 0
-
-        if balance_cents < 500:
-            await query.message.reply_text(f"❌ Saldo insuficiente. Mínimo: R$ 5,00. Você tem R$ {cents_to_float(balance_cents):.2f}")
-            return
-
-        cursor.execute(
-            "UPDATE users SET main_balance_cents = main_balance_cents + ?, affiliate_balance_cents = 0 WHERE user_id = ?",
-            (balance_cents, user_id)
-        )
-        conn.commit()
-        await query.message.reply_text(
-            f"✅ **Resgate realizado!**\n\nValor transferido: R$ {cents_to_float(balance_cents):.2f}"
-        )
-        logger.info(f"Resgate de afiliado: user={user_id}, amount={balance_cents} cents")
-    except Exception as e:
-        conn.rollback()
-        logger.error(f"Erro no resgate: {e}")
-        await query.message.reply_text("❌ Erro interno. Tente novamente.")
-    finally:
-        conn.close()
-
-# =========================================================
-# SAQUE PIX (COM CONVERSATION HANDLER E SEGURANÇA)
-# =========================================================
-async def withdraw_pix_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    if not query:
-        return
-    user_id = update.effective_user.id
-
-    # Verifica se já existe um saque em andamento para este usuário
-    if user_id in user_pix_locks and user_pix_locks[user_id].locked():
-        await query.answer()
-        await query.message.reply_text("⏳ Você já tem uma solicitação de saque em andamento. Aguarde.")
-        return ConversationHandler.END
-
-    # Cria um lock para este usuário
-    user_pix_locks[user_id] = Lock()
-    await user_pix_locks[user_id].acquire()
 
     try:
-        await query.answer()
-        conn = sqlite3.connect(DB_PATH)
+        target_id = int(context.args[0])
+        valor_float = float(context.args[1].replace(',', '.'))
+        if valor_float < 0:
+            raise ValueError
+        valor_cents = float_to_cents(valor_float)
+
+        conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT affiliate_balance_cents, first_name FROM users WHERE user_id = ?", (user_id,))
-        res = cursor.fetchone()
+
+        cursor.execute("SELECT first_name FROM users WHERE user_id = %s", (target_id,))
+        user_exists = cursor.fetchone()
+        if not user_exists:
+            cursor.execute("INSERT INTO users (user_id, main_balance_cents, first_name) VALUES (%s, %s, %s)",
+                           (target_id, 0, f"User_{target_id}"))
+            conn.commit()
+
+        cursor.execute("UPDATE users SET main_balance_cents = %s WHERE user_id = %s", (valor_cents, target_id))
+        conn.commit()
         conn.close()
 
-        if not res:
-            await query.message.reply_text("❌ Usuário não encontrado.")
-            return ConversationHandler.END
+        await update.message.reply_text(f"✅ Saldo de `{target_id}` atualizado para **R$ {cents_to_float(valor_cents):.2f}**", parse_mode="Markdown")
 
-        balance_cents = res[0]
-        name = res[1]
-
-        if balance_cents < 3000:
-            await query.message.reply_text(f"❌ Saldo insuficiente. Mínimo: R$ 30,00. Você tem R$ {cents_to_float(balance_cents):.2f}")
-            return ConversationHandler.END
-
-        context.user_data['pix_amount_cents'] = balance_cents
-        context.user_data['pix_user_name'] = name
-
-        keyboard = [[InlineKeyboardButton("❌ Cancelar", callback_data="cancel_pix")]]
-        await query.message.reply_text(
-            f"💰 **Valor a sacar:** R$ {cents_to_float(balance_cents):.2f}\n\n"
-            "Envie sua **chave PIX** (CPF, e-mail, telefone ou aleatória):\n"
-            "Digite ou cole a chave agora.\n\n"
-            "⚠️ *Chave inválida cancela a solicitação.*",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown"
-        )
-        return PIX_KEY
-    except Exception as e:
-        conn.rollback()
-        logger.error(f"Erro no saque PIX: {e}")
-    try:
-        # Tenta enviar a mensagem de erro, mas com timeout curto e sem esperar muito
-        await update.message.reply_text("❌ Erro interno ao processar saque. Tente novamente.")
-    except Exception as reply_error:
-        logger.error(f"Falha ao enviar mensagem de erro: {reply_error}")
-    finally:
-        # O lock será liberado apenas quando o fluxo terminar (no receive_pix_key ou cancel_pix)
-        pass
-
-async def receive_pix_key(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    pix_key = update.message.text.strip() if update.message and update.message.text else ""
-
-    if not pix_key or not is_valid_pix_key(pix_key):
-        await update.message.reply_text(
-            "❌ **Chave PIX inválida!**\n"
-            "Envie uma chave válida (CPF, e-mail, telefone ou aleatória).\n"
-            "Exemplo: `11999999999` ou `email@exemplo.com`\n\n"
-            "Digite novamente ou /cancel para sair.",
-            parse_mode="Markdown"
-        )
-        return PIX_KEY
-
-    amount_cents = context.user_data.get('pix_amount_cents')
-    name = context.user_data.get('pix_user_name') or "Usuário"
-
-    if not amount_cents:
-        await update.message.reply_text("❌ Sessão expirada. Inicie o saque novamente.")
-        return ConversationHandler.END
-
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    try:
-        # Verifica saldo
-        cursor.execute("SELECT affiliate_balance_cents FROM users WHERE user_id = ?", (user_id,))
-        row = cursor.fetchone()
-        if not row or row[0] < amount_cents:
-            await update.message.reply_text("❌ Saldo insuficiente. Saque cancelado.")
-            return ConversationHandler.END
-
-        # Prepara mensagem com botões de confirmação/cancelamento
-        admin_text = (
-            f"🚨 **SAQUE PIX SOLICITADO**\n\n"
-            f"👤 Usuário: {name}\n"
-            f"🆔 ID: `{user_id}`\n"
-            f"💰 Valor: **R$ {cents_to_float(amount_cents):.2f}**\n"
-            f"🔑 Chave: `{pix_key}`\n\n"
-            f"⏰ Data: `{datetime.now().strftime('%d/%m/%Y %H:%M:%S')}`"
-        )
-        keyboard = [
-            [
-                InlineKeyboardButton("✅ Confirmar Pagamento", callback_data=f"confirm_payment_{user_id}_{amount_cents}"),
-                InlineKeyboardButton("❌ Cancelar", callback_data=f"cancel_payment_{user_id}_{amount_cents}")
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
-        # Notifica admin (com tratamento de erro separado)
         try:
             await context.bot.send_message(
-                chat_id=ADMIN_ID,
-                text=admin_text,
-                reply_markup=reply_markup,
+                chat_id=target_id,
+                text=f"💰 Seu saldo foi alterado pelo administrador para: **R$ {cents_to_float(valor_cents):.2f}**",
                 parse_mode="Markdown"
             )
-        except Exception as e:
-            logger.error(f"Falha ao notificar admin: {e}")
-            await update.message.reply_text("❌ Erro ao processar solicitação. Tente mais tarde.")
-            return ConversationHandler.END
-
-        # Debita saldo
-        cursor.execute(
-            "UPDATE users SET affiliate_balance_cents = affiliate_balance_cents - ? WHERE user_id = ? AND affiliate_balance_cents >= ?",
-            (amount_cents, user_id, amount_cents)
-        )
-        if cursor.rowcount == 0:
-            await update.message.reply_text("❌ Saldo já utilizado. Saque cancelado.")
-            return ConversationHandler.END
-
-        conn.commit()
-        logger.info(f"SAQUE PIX confirmado: user={user_id}, amount={amount_cents}, key={pix_key}")
-
-        await update.message.reply_text(
-            f"✅ **Saque solicitado com sucesso!**\n\n"
-            f"💰 Valor: R$ {cents_to_float(amount_cents):.2f}\n"
-            f"🔑 Chave: `{pix_key}`\n\n"
-            "O administrador processará o pagamento em até 24 horas.\n"
-            "Qualquer dúvida, entre em contato com o suporte.",
-            parse_mode="Markdown"
-        )
-
-    except Exception as e:
-        conn.rollback()
-        logger.error(f"Erro no saque PIX: {e}")
-        try:
-            await update.message.reply_text("❌ Erro interno ao processar saque. Tente novamente.")
-        except Exception:
+        except:
             pass
-    finally:
-        conn.close()
-        context.user_data.pop('pix_amount_cents', None)
-        context.user_data.pop('pix_user_name', None)
-        if user_id in user_pix_locks:
-            lock = user_pix_locks.pop(user_id, None)
-            if lock:
-                try:
-                    lock.release()
-                except:
-                    pass
 
-    return ConversationHandler.END
-
-async def cancel_pix(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = update.effective_user.id
-
-    if query:
-        await query.answer()
-        await query.message.reply_text("❌ Saque via PIX cancelado.")
-    else:
-        await update.message.reply_text("❌ Operação cancelada.")
-
-    context.user_data.pop('pix_amount_cents', None)
-    context.user_data.pop('pix_user_name', None)
-
-    if user_id in user_pix_locks:
-        user_pix_locks[user_id].release()
-        del user_pix_locks[user_id]
-
-    return ConversationHandler.END
+    except ValueError:
+        await update.message.reply_text("❌ Formato inválido. Use números para ID e valor (ex: 10.50).")
+    except Exception as e:
+        logger.error(f"Erro em set_balance: {e}")
+        await update.message.reply_text("❌ Erro interno ao atualizar saldo.")
 
 # =========================================================
-# CONVERSATION HANDLER (para registrar no main.py)
+# (Opcional) Migração manual
 # =========================================================
-pix_withdrawal_handler = ConversationHandler(
-    entry_points=[CallbackQueryHandler(withdraw_pix_start, pattern="^aff_withdraw_pix$")],
-    states={
-        PIX_KEY: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, receive_pix_key),
-            CallbackQueryHandler(cancel_pix, pattern="^cancel_pix$")
-        ],
-    },
-    fallbacks=[CallbackQueryHandler(cancel_pix, pattern="^cancel_pix$")],
-    allow_reentry=False,  # Não permite reentrada enquanto um saque está ativo
-)
-
-async def confirm_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Callback para quando o admin confirma o pagamento do saque."""
-    query = update.callback_query
-    await query.answer("Pagamento confirmado!")
-
-    # Extrai dados do callback_data: "confirm_payment_userId_amountCents"
-    data = query.data.split("_")
-    user_id = int(data[2])
-    amount_cents = int(data[3])
-
-    # (Opcional) Registrar no banco que o pagamento foi realizado
-    # Por exemplo, criar uma tabela 'withdrawals' com status 'paid'
-    # Aqui apenas notificamos o usuário
-
-    # Mensagem para o afiliado
-    await context.bot.send_message(
-        chat_id=user_id,
-        text=(
-            f"✅ **Pagamento realizado!**\n\n"
-            f"Seu saque de **R$ {cents_to_float(amount_cents):.2f}** foi processado.\n"
-            f"O valor foi enviado para a chave PIX informada. Verifique sua conta em alguns instantes.\n\n"
-            f"Obrigado por usar o programa de afiliados da LikesPlus! 💰"
-        ),
-        parse_mode="Markdown"
-    )
-
-    # Atualiza a mensagem original do admin (remove os botões e marca como concluído)
-    await query.edit_message_text(
-        text=query.message.text + "\n\n✅ **Pagamento confirmado pelo administrador.**",
-        parse_mode="Markdown"
-    )
-
-async def cancel_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Callback para quando o admin cancela o saque (estorna o saldo do afiliado)."""
-    query = update.callback_query
-    await query.answer("Saque cancelado.")
-
-    data = query.data.split("_")
-    user_id = int(data[2])
-    amount_cents = int(data[3])
-
-    # Estorna o saldo do afiliado (devolve o que foi debitado)
-    conn = sqlite3.connect(DB_PATH)
+async def migrate_balance_column(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    conn = get_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute(
-            "UPDATE users SET affiliate_balance_cents = affiliate_balance_cents + ? WHERE user_id = ?",
-            (amount_cents, user_id)
-        )
-        conn.commit()
-        logger.info(f"Estorno de {amount_cents} centavos para o usuário {user_id} (saque cancelado)")
+        cursor.execute("PRAGMA table_info(users)")
+        cols = [c[1] for c in cursor.fetchall()]
+        if 'balance' in cols and 'main_balance_cents' in cols:
+            cursor.execute("UPDATE users SET main_balance_cents = CAST(ROUND(COALESCE(balance, 0) * 100) AS INTEGER)")
+            conn.commit()
+            await update.message.reply_text("✅ Migração da coluna 'balance' para 'main_balance_cents' concluída.")
+        else:
+            await update.message.reply_text("⚠️ Colunas necessárias não encontradas.")
     except Exception as e:
-        logger.error(f"Erro ao estornar saldo: {e}")
+        await update.message.reply_text(f"❌ Erro: {e}")
     finally:
         conn.close()
 
-    # Notifica o usuário sobre o cancelamento
-    await context.bot.send_message(
-        chat_id=user_id,
-        text=(
-            f"❌ **Saque cancelado!**\n\n"
-            f"O saque de **R$ {cents_to_float(amount_cents):.2f}** foi cancelado pelo administrador.\n"
-            f"O valor foi devolvido para o seu saldo de afiliado.\n\n"
-            f"Entre em contato com o suporte para mais informações."
-        ),
-        parse_mode="Markdown"
-    )
+async def sync_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Apenas o administrador pode usar este comando.")
+        return
 
-    # Atualiza a mensagem do admin
-    await query.edit_message_text(
-        text=query.message.text + "\n\n❌ **Saque cancelado pelo administrador (saldo estornado).**",
-        parse_mode="Markdown"
+    await update.message.reply_text("⏳ Sincronizando serviços com o fornecedor...")
+
+    try:
+        import subprocess
+        import sys
+        import os
+
+        script_path = os.path.join(os.path.dirname(__file__), '..', 'update_db.py')
+        result = subprocess.run(
+            [sys.executable, script_path],
+            capture_output=True,
+            text=True,
+            timeout=120
+        )
+
+        if result.returncode == 0:
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM services")
+            count = cursor.fetchone()[0]
+            conn.close()
+
+            await update.message.reply_text(
+                f"✅ **Sincronização concluída!**\n\n"
+                f"📊 Total de serviços no banco: `{count}`\n"
+                f"📡 Fornecedor: API atualizada\n\n"
+                f"Use `/comprar` para ver os novos serviços."
+            )
+        else:
+            await update.message.reply_text(f"❌ Erro na sincronização:\n```\n{result.stderr[:500]}\n```")
+
+    except Exception as e:
+        await update.message.reply_text(f"❌ Erro ao executar: `{str(e)}`")
+
+async def test_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Apenas o administrador.")
+        return
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT COUNT(*) FROM services")
+    total = cursor.fetchone()[0]
+
+    cursor.execute("SELECT DISTINCT category FROM services ORDER BY category LIMIT 15")
+    categorias = [row[0] for row in cursor.fetchall()]
+
+    cursor.execute("SELECT service_id, name, rate, category FROM services LIMIT 5")
+    servicos = cursor.fetchall()
+
+    conn.close()
+
+    msg = f"📊 **Total de serviços:** `{total}`\n\n"
+    msg += "📂 **Categorias (amostra):**\n"
+    for cat in categorias:
+        msg += f"• `{cat}`\n"
+
+    msg += "\n🛒 **Primeiros serviços:**\n"
+    for s in servicos:
+        msg += f"• ID `{s[0]}` – {s[1]} (R$ {s[2]:.2f}) – *{s[3]}*\n"
+
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+async def debug_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Apenas administrador.")
+        return
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT COUNT(*) FROM services")
+    total = cursor.fetchone()[0]
+
+    cursor.execute("SELECT DISTINCT category FROM services WHERE rate > 0 LIMIT 10")
+    raw_cats = [row[0] for row in cursor.fetchall()]
+
+    cursor.execute("SELECT service_id, name, category FROM services LIMIT 5")
+    sample_services = cursor.fetchall()
+    conn.close()
+
+    from handlers.services import get_categories
+    final_cats = get_categories()
+
+    msg = f"=== DIAGNÓSTICO ===\n\n"
+    msg += f"Total de serviços: {total}\n\n"
+    msg += "Categorias cruas (banco, primeiras 10):\n"
+    for cat in raw_cats:
+        msg += f"- {cat}\n"
+    msg += "\nCategorias processadas (get_categories):\n"
+    for cat in final_cats[:10]:
+        msg += f"- {cat}\n"
+    msg += "\nAmostra de serviços (ID, nome, categoria):\n"
+    for s in sample_services:
+        msg += f"- {s[0]} – {s[1][:50]} – {s[2]}\n"
+
+    await update.message.reply_text(msg)
+
+async def test_api_fields(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    import requests
+    url = os.getenv("SMM_API_URL_1")
+    key = os.getenv("SMM_API_KEY_1")
+    try:
+        r = requests.post(url, data={'key': key, 'action': 'services'}, timeout=30)
+        data = r.json()
+        if isinstance(data, list) and len(data) > 0:
+            primeiro = data[0]
+            campos = list(primeiro.keys())
+            await update.message.reply_text(f"Campos do primeiro serviço:\n{', '.join(campos)}")
+        else:
+            await update.message.reply_text("Resposta inesperada.")
+    except Exception as e:
+        await update.message.reply_text(f"Erro: {e}")
+
+async def check_descriptions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("❌ Apenas administrador.")
+        return
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT service_id, name, description FROM services WHERE description IS NOT NULL AND description != '' LIMIT 5")
+    rows = cursor.fetchall()
+    conn.close()
+    if rows:
+        msg = "📝 **Serviços com descrição (até 5):**\n\n"
+        for r in rows:
+            msg += f"🆔 `{r[0]}` – {r[1][:40]}\n📄 {r[2][:100]}\n\n"
+    else:
+        msg = "❌ Nenhum serviço possui descrição no banco."
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+async def list_providers(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT provider, COUNT(*) FROM services GROUP BY provider")
+    counts = cursor.fetchall()
+    msg = "📊 Serviços por fornecedor:\n"
+    for prov, count in counts:
+        msg += f"  Fornecedor {prov}: {count}\n"
+    cursor.execute("SELECT DISTINCT category FROM services WHERE provider = 2 LIMIT 10")
+    cats2 = cursor.fetchall()
+    msg += "\n📂 Categorias do Fornecedor 2 (amostra):\n"
+    for cat in cats2:
+        msg += f"  - {cat[0]}\n"
+    cursor.execute("SELECT DISTINCT category FROM services WHERE provider = 1 LIMIT 10")
+    cats1 = cursor.fetchall()
+    msg += "\n📂 Categorias do Fornecedor 1 (amostra):\n"
+    for cat in cats1:
+        msg += f"  - {cat[0]}\n"
+    conn.close()
+    await update.message.reply_text(msg)
+
+async def debug_categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from handlers.services import get_categories
+    cats = get_categories()
+    if not cats:
+        await update.message.reply_text("⚠️ Nenhuma categoria retornada.")
+        return
+
+    c1 = [c for c in cats if '[C1]' in c]
+    c2 = [c for c in cats if '[C2]' in c]
+
+    msg = (
+        f"📊 **Total de categorias:** {len(cats)}\n"
+        f"🔵 Fornecedor 1: {len(c1)}\n"
+        f"🟢 Fornecedor 2: {len(c2)}\n\n"
     )
+    if c2:
+        preview = "\n".join(c2[:15])
+        msg += f"**Exemplos C2:**\n{preview}"
+    else:
+        msg += "❌ **Nenhuma categoria do Fornecedor 2 foi retornada!**"
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+async def fix_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Acesso negado.")
+        return
+
+    args = context.args
+    if len(args) < 6:
+        await update.message.reply_text(
+            "Uso: /corrigir_pedido <user_id> <order_id_api> <amount_float> <provider_id> <service_name> <quantity>\n"
+            "Exemplo: /corrigir_pedido 8250294969 874907 1.50 2 \"Seguidores Instagram\" 100"
+        )
+        return
+
+    try:
+        user_id = int(args[0])
+        order_id_api = int(args[1])
+        amount_float = float(args[2])
+        provider_id = int(args[3])
+        service_name = ' '.join(args[4:-1])
+        quantity = int(args[-1])
+    except ValueError:
+        await update.message.reply_text("❌ Parâmetros inválidos. Verifique os tipos.")
+        return
+
+    amount_cents = int(amount_float * 100)
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            INSERT INTO orders (user_id, service_name, quantity, amount_cents, order_id_api, status, date, provider_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """, (user_id, service_name, quantity, amount_cents, order_id_api, "Pendente", datetime.now().strftime("%d/%m/%Y %H:%M"), provider_id))
+        cursor.execute("UPDATE users SET main_balance_cents = main_balance_cents = main_balance_cents - %s WHERE user_id = %s", (amount_cents, user_id))
+        conn.commit()
+        await update.message.reply_text(
+            f"✅ Pedido `{order_id_api}` corrigido.\n"
+            f"👤 Usuário: `{user_id}`\n"
+            f"💰 Valor debitado: R$ {amount_float:.2f}"
+        )
+    except Exception as e:
+        conn.rollback()
+        await update.message.reply_text(f"❌ Erro: {e}")
+    finally:
+        conn.close()
+
+async def limpar_fornecedor(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    try:
+        prov = int(context.args[0])
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM services WHERE provider = %s", (prov,))
+        conn.commit()
+        conn.close()
+        await update.message.reply_text(f"✅ Serviços do Fornecedor {prov} removidos.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Erro: {e}")
+
+async def add_link_column(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("PRAGMA table_info(orders)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if 'link' in columns:
+            await update.message.reply_text("✅ A coluna 'link' já existe na tabela orders.")
+        else:
+            cursor.execute("ALTER TABLE orders ADD COLUMN link TEXT")
+            conn.commit()
+            await update.message.reply_text("✅ Coluna 'link' adicionada com sucesso!")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Erro: {e}")
+    finally:
+        conn.close()
