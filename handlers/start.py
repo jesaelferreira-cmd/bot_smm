@@ -82,7 +82,17 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     (user_id,)
                 )
                 row = cur.fetchone()
-                saldo_centavos = int(row[0]) if row else 0
+                raw_balance = row[0] if row else 0
+# Aceita string ('3.14'), float (3.14) ou int (314)
+                if isinstance(raw_balance, str):
+    # Provavelmente está em reais como texto
+                    saldo_centavos = int(round(float(raw_balance) * 100))
+                elif isinstance(raw_balance, float):
+      # Float em reais
+                    saldo_centavos = int(round(raw_balance * 100))
+                else:
+    # Já é inteiro (centavos)
+                    saldo_centavos = int(raw_balance)
                 saldo_reais = saldo_centavos / 100.0
 
                 # Pedidos

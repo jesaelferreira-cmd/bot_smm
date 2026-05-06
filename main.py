@@ -159,9 +159,7 @@ def main():
         app.add_handler(CommandHandler("corrigir_pedido", fix_order))
         app.add_handler(CommandHandler("limpar_fornecedor", limpar_fornecedor))
         app.add_handler(CommandHandler("addlink", add_link_column))
-        app.add_handler(CommandHandler("fix_pk", admin.fix_users_pk))
-        app.add_handler(CommandHandler("fix_user_id", admin.fix_user_id_type))
-        app.add_handler(CommandHandler("fix_balances", admin.fix_balance_columns))
+        app.add_handler(CommandHandler("fix_all", admin.fix_all))
         # =========================================================
         # 3. CALLBACKS GERAIS (FORA DO CONVERSATION)
         # =========================================================
