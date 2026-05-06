@@ -653,3 +653,32 @@ async def fix_user_id_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Erro: {e}")
     finally:
         conn.close()
+
+async def fix_balance_columns(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Converte balance e affiliate_balance para BIGINT (centavos)."""
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Acesso negado.")
+        return
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        # 1. Converter balance
+        cursor.execute("""
+            ALTER TABLE users
+            ALTER COLUMN balance TYPE BIGINT USING
+                (COALESCE(ROUND(balance::numeric * 100), 0))::BIGINT;
+        """)
+        # 2. Converter affiliate_balance
+        cursor.execute("""
+            ALTER TABLE users
+            ALTER COLUMN affiliate_balance TYPE BIGINT USING
+                (COALESCE(ROUND(affiliate_balance::numeric * 100), 0))::BIGINT;
+        """)
+        conn.commit()
+        await update.message.reply_text("✅ Colunas de saldo convertidas para centavos (BIGINT)!")
+    except Exception as e:
+        conn.rollback()
+        await update.message.reply_text(f"❌ Erro: {e}")
+    finally:
+        conn.close()
