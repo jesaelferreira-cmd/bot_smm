@@ -164,6 +164,7 @@ def main():
         app.add_handler(CommandHandler("clean_cats", admin.clean_categories))
         app.add_handler(CommandHandler("fix_services", admin.fix_services_full))
         app.add_handler(CommandHandler("fix_tables", admin.fix_all_tables))
+        app.add_handler(CommandHandler("fix_ref", admin.fix_referred_by))
         # =========================================================
         # 3. CALLBACKS GERAIS (FORA DO CONVERSATION)
         # =========================================================

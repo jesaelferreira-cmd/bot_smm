@@ -1234,3 +1234,22 @@ async def clean_categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Erro: {e}")
     finally:
         conn.close()
+
+async def fix_referred_by(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Converte referred_by para BIGINT."""
+    if update.effective_user.id != ADMIN_ID:
+        return
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            ALTER TABLE users ALTER COLUMN referred_by TYPE BIGINT
+            USING (referred_by::BIGINT);
+        """)
+        conn.commit()
+        await update.message.reply_text("✅ referred_by → BIGINT")
+    except Exception as e:
+        conn.rollback()
+        await update.message.reply_text(f"❌ Erro: {e}")
+    finally:
+        conn.close()
