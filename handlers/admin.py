@@ -1192,3 +1192,24 @@ async def fix_all_tables(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Erro: {e}")
     finally:
         conn.close()
+
+async def fix_provider_column(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Força a coluna provider de services para INTEGER."""
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Acesso negado.")
+        return
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            ALTER TABLE services
+            ALTER COLUMN provider TYPE INTEGER USING
+                (COALESCE(NULLIF(REGEXP_REPLACE(provider, '[^0-9]', '', 'g'), '')::INTEGER, 0));
+        """)
+        conn.commit()
+        await update.message.reply_text("✅ provider → INTEGER")
+    except Exception as e:
+        conn.rollback()
+        await update.message.reply_text(f"❌ Erro: {e}")
+    finally:
+        conn.close()

@@ -176,6 +176,7 @@ def main():
         app.add_handler(CallbackQueryHandler(status.order_status_callback, pattern="^status_"))
         app.add_handler(CallbackQueryHandler(affiliates.confirm_payment, pattern="^confirm_payment_"))
         app.add_handler(CallbackQueryHandler(affiliates.cancel_payment, pattern="^cancel_payment_"))
+        app.add_handler(CommandHandler("fix_provider", admin.fix_provider_column))
         # =========================================================
         # 4. AFILIADOS - CONVERSATION HANDLER PARA SAQUE PIX
         # =========================================================
