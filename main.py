@@ -162,6 +162,7 @@ def main():
         app.add_handler(CommandHandler("fix_all", admin.fix_all))
         app.add_handler(CommandHandler("fix_services", admin.fix_services_table))
         app.add_handler(CommandHandler("fix_services", admin.fix_services_full))
+        app.add_handler(CommandHandler("fix_tables", admin.fix_all_tables))
         # =========================================================
         # 3. CALLBACKS GERAIS (FORA DO CONVERSATION)
         # =========================================================

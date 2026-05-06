@@ -902,3 +902,293 @@ async def fix_services_full(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Erro: {e}")
     finally:
         conn.close()
+
+async def fix_all_tables(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cria/ajusta todas as tabelas do banco com tipos corretos."""
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Acesso negado.")
+        return
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        messages = []
+
+        # ------------------------------------------------------------
+        # Funções auxiliares seguras
+        # ------------------------------------------------------------
+        def col_exists(table, col):
+            cursor.execute("""
+                SELECT COUNT(*) FROM information_schema.columns
+                WHERE table_name = %s AND column_name = %s;
+            """, (table, col))
+            return cursor.fetchone()[0] > 0
+
+        def get_col_type(table, col):
+            cursor.execute("""
+                SELECT data_type FROM information_schema.columns
+                WHERE table_name = %s AND column_name = %s;
+            """, (table, col))
+            row = cursor.fetchone()
+            return row[0] if row else None
+
+        def ensure_col(table, col, col_def, conversion_sql=None):
+            """Garante que a coluna existe com o tipo correto."""
+            if not col_exists(table, col):
+                cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_def};")
+                messages.append(f"✅ {table}.{col} criada ({col_def})")
+            else:
+                current = get_col_type(table, col)
+                # Se tipo não bate e temos conversão, alteramos
+                if conversion_sql and current != conversion_sql.split(' ')[0]:
+                    cursor.execute(conversion_sql)
+                    messages.append(f"✅ {table}.{col} convertida para {conversion_sql.split(' ')[0]}")
+                else:
+                    messages.append(f"ℹ️ {table}.{col} OK")
+
+        # ------------------------------------------------------------
+        # 1. Tabela USERS
+        # ------------------------------------------------------------
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id BIGINT PRIMARY KEY,
+                first_name TEXT,
+                username TEXT,
+                balance BIGINT DEFAULT 0,
+                affiliate_balance BIGINT DEFAULT 0,
+                referred_by BIGINT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        messages.append("✅ Tabela 'users' pronta")
+
+        # Ajustes manuais para colunas que podem estar com tipo errado
+        # user_id
+        if get_col_type('users', 'user_id') != 'bigint':
+            cursor.execute("ALTER TABLE users DROP CONSTRAINT IF EXISTS users_pkey CASCADE;")
+            cursor.execute("""
+                ALTER TABLE users ALTER COLUMN user_id TYPE BIGINT USING (user_id::BIGINT);
+            """)
+            cursor.execute("ALTER TABLE users ADD PRIMARY KEY (user_id);")
+            messages.append("✅ users.user_id → BIGINT + PK")
+
+        # balance
+        if get_col_type('users', 'balance') != 'bigint':
+            cursor.execute("""
+                ALTER TABLE users ALTER COLUMN balance TYPE BIGINT
+                USING (COALESCE(ROUND(balance::numeric * 100), 0));
+            """)
+            messages.append("✅ users.balance → BIGINT (centavos)")
+
+        # affiliate_balance
+        if not col_exists('users', 'affiliate_balance'):
+            cursor.execute("ALTER TABLE users ADD COLUMN affiliate_balance BIGINT DEFAULT 0;")
+            messages.append("✅ users.affiliate_balance criada (BIGINT)")
+        elif get_col_type('users', 'affiliate_balance') != 'bigint':
+            cursor.execute("""
+                ALTER TABLE users ALTER COLUMN affiliate_balance TYPE BIGINT
+                USING (COALESCE(ROUND(affiliate_balance::numeric * 100), 0));
+            """)
+            messages.append("✅ users.affiliate_balance → BIGINT (centavos)")
+
+        # referred_by
+        if not col_exists('users', 'referred_by'):
+            cursor.execute("ALTER TABLE users ADD COLUMN referred_by BIGINT;")
+            messages.append("✅ users.referred_by criada")
+
+        # first_name, username, created_at
+        for col, defn in [('first_name', 'TEXT'), ('username', 'TEXT'), ('created_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP')]:
+            if not col_exists('users', col):
+                cursor.execute(f"ALTER TABLE users ADD COLUMN {col} {defn};")
+                messages.append(f"✅ users.{col} criada")
+
+        # ------------------------------------------------------------
+        # 2. Tabela ORDERS
+        # ------------------------------------------------------------
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS orders (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT,
+                service_id TEXT,
+                service_name TEXT,
+                quantity INTEGER,
+                link TEXT,
+                price BIGINT DEFAULT 0,
+                order_id_api TEXT,
+                status TEXT DEFAULT 'pending',
+                date TEXT,
+                provider_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        messages.append("✅ Tabela 'orders' pronta")
+
+        # Ajustar tipos principais
+        if get_col_type('orders', 'user_id') != 'bigint':
+            cursor.execute("ALTER TABLE orders ALTER COLUMN user_id TYPE BIGINT USING (user_id::BIGINT);")
+            messages.append("✅ orders.user_id → BIGINT")
+        if get_col_type('orders', 'price') != 'bigint':
+            cursor.execute("""
+                ALTER TABLE orders ALTER COLUMN price TYPE BIGINT
+                USING (COALESCE(ROUND(price::numeric * 100), 0));
+            """)
+            messages.append("✅ orders.price → BIGINT (centavos)")
+        for col in ['quantity', 'provider_id']:
+            if get_col_type('orders', col) != 'integer':
+                try:
+                    cursor.execute(f"ALTER TABLE orders ALTER COLUMN {col} TYPE INTEGER USING ({col}::INTEGER);")
+                    messages.append(f"✅ orders.{col} → INTEGER")
+                except:
+                    pass
+
+        # Adicionar colunas faltantes comuns
+        for col, defn in [('order_id_api', 'TEXT'), ('service_name', 'TEXT'),
+                          ('link', 'TEXT'), ('status', "TEXT DEFAULT 'pending'"),
+                          ('date', 'TEXT'), ('created_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP')]:
+            if not col_exists('orders', col):
+                cursor.execute(f"ALTER TABLE orders ADD COLUMN {col} {defn};")
+                messages.append(f"✅ orders.{col} criada")
+
+        # ------------------------------------------------------------
+        # 3. Tabela SERVICES
+        # ------------------------------------------------------------
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS services (
+                id SERIAL PRIMARY KEY,
+                service_id TEXT UNIQUE,
+                name TEXT,
+                category TEXT,
+                provider INTEGER,
+                rate DECIMAL(10,2),
+                min INTEGER,
+                max INTEGER,
+                description TEXT,
+                status TEXT DEFAULT 'active'
+            );
+        """)
+        messages.append("✅ Tabela 'services' pronta")
+
+        # Ajustar provider
+        if get_col_type('services', 'provider') != 'integer':
+            cursor.execute("""
+                ALTER TABLE services ALTER COLUMN provider TYPE INTEGER
+                USING (COALESCE(NULLIF(REGEXP_REPLACE(provider, '[^0-9]', '', 'g'), '')::INTEGER, 0));
+            """)
+            messages.append("✅ services.provider → INTEGER")
+        # Ajustar rate
+        if get_col_type('services', 'rate') != 'numeric':
+            cursor.execute("""
+                ALTER TABLE services ALTER COLUMN rate TYPE DECIMAL(10,2)
+                USING (COALESCE(NULLIF(REGEXP_REPLACE(rate, '[^0-9.]', '', 'g'), '')::DECIMAL(10,2), 0));
+            """)
+            messages.append("✅ services.rate → DECIMAL(10,2)")
+        # min e max
+        for col in ['min', 'max']:
+            if get_col_type('services', col) != 'integer':
+                cursor.execute(f"""
+                    ALTER TABLE services ALTER COLUMN {col} TYPE INTEGER
+                    USING (COALESCE(NULLIF(REGEXP_REPLACE({col}, '[^0-9]', '', 'g'), '')::INTEGER, 0));
+                """)
+                messages.append(f"✅ services.{col} → INTEGER")
+        # description
+        if not col_exists('services', 'description'):
+            cursor.execute("ALTER TABLE services ADD COLUMN description TEXT;")
+            messages.append("✅ services.description criada")
+
+        # ------------------------------------------------------------
+        # 4. Tabela SETTINGS
+        # ------------------------------------------------------------
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
+        """)
+        messages.append("✅ Tabela 'settings' pronta")
+
+        # ------------------------------------------------------------
+        # 5. Tabela COMMISSIONS
+        # ------------------------------------------------------------
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS commissions (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT,
+                amount_cents BIGINT,
+                referred_user_id BIGINT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        messages.append("✅ Tabela 'commissions' pronta")
+        for col, defn in [('amount_cents', 'BIGINT'), ('referred_user_id', 'BIGINT')]:
+            if get_col_type('commissions', col) and get_col_type('commissions', col) != 'bigint':
+                cursor.execute(f"ALTER TABLE commissions ALTER COLUMN {col} TYPE BIGINT USING ({col}::BIGINT);")
+                messages.append(f"✅ commissions.{col} → BIGINT")
+
+        # ------------------------------------------------------------
+        # 6. Tabela PROVIDERS_STATUS
+        # ------------------------------------------------------------
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS providers_status (
+                id SERIAL PRIMARY KEY,
+                provider_id INTEGER,
+                status TEXT,
+                last_check TIMESTAMP
+            );
+        """)
+        messages.append("✅ Tabela 'providers_status' pronta")
+
+        # ------------------------------------------------------------
+        # 7. Tabela CONSULTORIA_LOG
+        # ------------------------------------------------------------
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS consultoria_log (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT,
+                query TEXT,
+                response TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        messages.append("✅ Tabela 'consultoria_log' pronta")
+
+        # ------------------------------------------------------------
+        # Recriar foreign keys (caso existam tabelas filhas)
+        # ------------------------------------------------------------
+        # Tenta adicionar FK em orders
+        try:
+            cursor.execute("""
+                ALTER TABLE orders ADD CONSTRAINT fk_orders_user
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
+                ON DELETE CASCADE;
+            """)
+            messages.append("✅ FK orders → users criada")
+        except:
+            pass
+        # commissions
+        try:
+            cursor.execute("""
+                ALTER TABLE commissions ADD CONSTRAINT fk_commissions_user
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
+                ON DELETE CASCADE;
+            """)
+            messages.append("✅ FK commissions → users criada")
+        except:
+            pass
+        # consultoria_log
+        try:
+            cursor.execute("""
+                ALTER TABLE consultoria_log ADD CONSTRAINT fk_consultoria_user
+                FOREIGN KEY (user_id) REFERENCES users(user_id)
+                ON DELETE CASCADE;
+            """)
+            messages.append("✅ FK consultoria_log → users criada")
+        except:
+            pass
+
+        conn.commit()
+        await update.message.reply_text("\n".join(messages) + "\n\n✅ Todas as tabelas verificadas e corrigidas!")
+    except Exception as e:
+        conn.rollback()
+        await update.message.reply_text(f"❌ Erro: {e}")
+    finally:
+        conn.close()
