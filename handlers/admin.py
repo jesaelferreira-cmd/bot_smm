@@ -618,3 +618,38 @@ async def fix_users_pk(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Erro: {e}")
     finally:
         conn.close()
+
+async def fix_user_id_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Converte a coluna user_id para BIGINT e garante a PK."""
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Acesso negado.")
+        return
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        # 1. Converte o tipo
+        cursor.execute("""
+            ALTER TABLE users
+            ALTER COLUMN user_id TYPE BIGINT USING user_id::BIGINT;
+        """)
+        # 2. Garante a PK novamente (pode ter sido perdida)
+        cursor.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conname = 'users_pkey' AND conrelid = 'users'::regclass
+                ) THEN
+                    ALTER TABLE users ADD PRIMARY KEY (user_id);
+                END IF;
+            END;
+            $$;
+        """)
+        conn.commit()
+        await update.message.reply_text("✅ Coluna user_id convertida para BIGINT e PK garantida!")
+    except Exception as e:
+        conn.rollback()
+        await update.message.reply_text(f"❌ Erro: {e}")
+    finally:
+        conn.close()
