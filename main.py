@@ -5,8 +5,12 @@ import logging
 import sys
 import datetime
 import os
+import warnings
 from dotenv import load_dotenv
 from pathlib import Path
+from telegram.warnings import PTBUserWarning
+
+warnings.filterwarnings("ignore", category=PTBUserWarning)
 
 load_dotenv()
 

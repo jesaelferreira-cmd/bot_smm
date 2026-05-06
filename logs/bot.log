@@ -102742,3 +102742,14 @@ telegram.error.NetworkError: httpx.ConnectError: [Errno 7] No address associated
 2026-05-06 00:23:06,370 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8372664540:AAGWE23pjkJSs5IjQbXa9t7Hr8QLi7JaOrY/getUpdates "HTTP/1.1 200 OK"
 2026-05-06 00:23:06,373 - telegram.ext.Application - INFO - Application is stopping. This might take a moment.
 2026-05-06 00:23:06,373 - telegram.ext.Application - INFO - Application.stop() complete
+2026-05-06 00:31:34,967 - __main__ - INFO - Inicializando banco de dados...
+2026-05-06 00:31:34,992 - database.connection - INFO - Conexão estabelecida via DATABASE_URL
+2026-05-06 00:31:34,998 - database.connection - INFO - Banco de dados inicializado com sucesso.
+2026-05-06 00:31:35,182 - __main__ - INFO - LikesPlus está rodando! 🚀
+2026-05-06 00:31:35,963 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8372664540:AAGWE23pjkJSs5IjQbXa9t7Hr8QLi7JaOrY/getMe "HTTP/1.1 200 OK"
+2026-05-06 00:31:36,485 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8372664540:AAGWE23pjkJSs5IjQbXa9t7Hr8QLi7JaOrY/deleteWebhook "HTTP/1.1 200 OK"
+2026-05-06 00:31:36,490 - telegram.ext.Application - INFO - Application started
+2026-05-06 00:31:47,273 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8372664540:AAGWE23pjkJSs5IjQbXa9t7Hr8QLi7JaOrY/getUpdates "HTTP/1.1 200 OK"
+2026-05-06 00:31:53,009 - httpx - INFO - HTTP Request: POST https://api.telegram.org/bot8372664540:AAGWE23pjkJSs5IjQbXa9t7Hr8QLi7JaOrY/getUpdates "HTTP/1.1 200 OK"
+2026-05-06 00:31:53,012 - telegram.ext.Application - INFO - Application is stopping. This might take a moment.
+2026-05-06 00:31:53,012 - telegram.ext.Application - INFO - Application.stop() complete
