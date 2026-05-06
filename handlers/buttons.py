@@ -1,75 +1,77 @@
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import ContextTypes, ConversationHandler
-from handlers.services import get_categories, get_services, get_service_by_id
+import logging
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes
+from handlers.start import start_command
+from handlers.balance import show_balance, pix_command
+from handlers.services import list_services, category_services, receive_service, back_to_categories
+from handlers.orders import confirm_order
+from handlers.status import my_orders, order_status_callback
+from handlers.affiliates import show_affiliates, my_referrals, withdraw_to_bot
+from handlers.admin import admin_panel
+from database import get_connection
+
+logger = logging.getLogger(__name__)
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
     data = query.data
+    await query.answer()
 
-    # 1. Clicar na categoria
-    if data.startswith("cat|"):
-        category = data.split("|")[1]
-        services = get_services(category)
-        
-        if not services:
-            await query.edit_message_text("⚠️ NENHUM SERVIÇO ENCONTRADO NESTA CATEGORIA.")
-            return
+    # ========== NAVEGAÇÃO PRINCIPAL ==========
+    if data == "back_to_start":
+        await start_command(update, context)
+    elif data == "back_to_categories":
+        await list_services(update, context)
+    elif data == "show_balance":
+        await show_balance(update, context)
+    elif data == "my_history":
+        await my_orders(update, context)
+    elif data == "affiliates":
+        await show_affiliates(update, context)
+    elif data == "aff_my_referrals":
+        await my_referrals(update, context)
+    elif data == "aff_withdraw_bot":
+        await withdraw_to_bot(update, context)
+    elif data == "add_balance":
+        await pix_command(update, context)
+    elif data == "admin_panel":
+        await admin_panel(update, context)
+    elif data.startswith("status_"):
+        await order_status_callback(update, context)
 
-        buttons = []
-        for s in services:
-            # Layout mantido: Nome | Min | Max | Preço
-            buttons.append([
-                InlineKeyboardButton(
-                    f"{s[1]} | Min:{s[3]} Max:{s[4]} | R${s[2]:.2f}",
-                    callback_data=f"service|{s[0]}"
-                )
-            ])
+    # ========== COMPRA (callbacks do services.py) ==========
+    elif data.startswith("cat_"):
+        await category_services(update, context)
+    elif data.startswith("serv_"):
+        await receive_service(update, context)
+    elif data == "confirm_price":
+        from handlers.services import confirm_price_callback
+        await confirm_price_callback(update, context)
+    elif data == "proceed_quantity":
+        from handlers.services import proceed_to_quantity
+        await proceed_to_quantity(update, context)
+    elif data == "execute_order":
+        await confirm_order(update, context)
+    elif data == "cancel_order":
+        from handlers.services import cancel_to_services
+        await cancel_to_services(update, context)
 
-        buttons.append([InlineKeyboardButton("🔙 Voltar", callback_data="back")])
-        await query.edit_message_text(
-            f"📦 **CATEGORIA:** {category.upper()}",
-            reply_markup=InlineKeyboardMarkup(buttons),
-            parse_mode="Markdown"
-        )
+    # ========== PAGINAÇÃO ==========
+    elif data.startswith("catpage_"):
+        from handlers.services import category_page_nav
+        await category_page_nav(update, context)
 
-    # 2. Clicar no serviço
-    elif data.startswith("service|"):
-        service_id = data.split("|")[1]
-        service = get_service_by_id(service_id)
+    # ========== SAQUE PIX (afiliados) ==========
+    elif data.startswith("confirm_payment_"):
+        from handlers.affiliates import confirm_payment
+        await confirm_payment(update, context)
+    elif data.startswith("cancel_payment_"):
+        from handlers.affiliates import cancel_payment
+        await cancel_payment(update, context)
+    elif data == "cancel_pix":
+        from handlers.affiliates import cancel_pix
+        await cancel_pix(update, context)
 
-        # Proteção contra erro de 'NoneType' no banco de dados
-        if not service:
-            await query.edit_message_text("❌ ERRO: SERVIÇO NÃO ENCONTRADO NO BANCO DE DADOS.")
-            return
-
-        context.user_data['service_id'] = service_id
-        context.user_data['service_name'] = service[1]
-        context.user_data['service_rate'] = service[2] # Adicionado Preço
-        context.user_data['service_min'] = service[3]
-        context.user_data['service_max'] = service[4]
-
-        await query.edit_message_text(
-            f"✅ **SERVIÇO ESCOLHIDO:**\n\n"
-            f"📌 **Nome:** {service[1]}\n"
-            f"💰 **Preço (1k):** R$ {service[2]:.2f}\n"
-            f"📉 **Mínimo:** {service[3]}\n"
-            f"📈 **Máximo:** {service[4]}\n\n"
-            f"✍️ **DIGITE A QUANTIDADE DESEJADA:**",
-            parse_mode="Markdown"
-        )
-        return "WAIT_QUANTITY"
-
-    # 3. Voltar para categorias
-    elif data == "back":
-        categories = get_categories()
-        buttons = [[InlineKeyboardButton(cat, callback_data=f"cat|{cat}")] for cat in categories]
-        # Layout UX: Botão de voltar ao início
-        buttons.append([InlineKeyboardButton("🏠 Menu Inicial", callback_data="back_to_start")])
-
-        await query.edit_message_text(
-            "📂 **ESCOLHA UMA CATEGORIA:**",
-            reply_markup=InlineKeyboardMarkup(buttons),
-            parse_mode="Markdown"
-        )
-
+    else:
+        logger.warning(f"Callback não tratado: {data}")
+        await query.message.reply_text("⚠️ Função não implementada ainda.")

@@ -1,0 +1,138 @@
+2026-05-04 13:05:29.273 -04 [4027] LOG:  starting PostgreSQL 18.2 on aarch64-unknown-linux-android, compiled by Android (13989888, +pgo, +bolt, +lto, +mlgo, based on r563880c) clang version 21.0.0 (https://android.googlesource.com/toolchain/llvm-project 5e96669f06077099aa41290cdb4c5e6fa0f59349), 64-bit
+2026-05-04 13:05:29.275 -04 [4027] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-04 13:05:29.276 -04 [4027] LOG:  listening on Unix socket "/data/data/com.termux/files/usr/tmp/.s.PGSQL.5432"
+2026-05-04 13:05:29.297 -04 [4071] LOG:  database system was shut down at 2026-05-04 13:05:26 -04
+2026-05-04 13:05:29.328 -04 [4027] LOG:  database system is ready to accept connections
+2026-05-04 13:06:11.838 -04 [4843] ERROR:  role "botuser" does not exist
+2026-05-04 13:06:11.838 -04 [4843] STATEMENT:  CREATE DATABASE likesplus_db OWNER botuser;
+2026-05-04 13:06:23.456 -04 [4929] FATAL:  role "botuser" does not exist
+2026-05-04 13:08:21.613 -04 [4027] LOG:  received fast shutdown request
+2026-05-04 13:08:21.614 -04 [4027] LOG:  aborting any active transactions
+2026-05-04 13:08:21.661 -04 [4027] LOG:  background worker "logical replication launcher" (PID 4075) exited with exit code 1
+2026-05-04 13:08:21.661 -04 [4059] LOG:  shutting down
+2026-05-04 13:08:21.665 -04 [4059] LOG:  checkpoint starting: shutdown immediate
+2026-05-04 13:08:21.724 -04 [4059] LOG:  checkpoint complete: wrote 40 buffers (0.2%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.004 s, sync=0.002 s, total=0.060 s; sync files=11, longest=0.001 s, average=0.001 s; distance=295 kB, estimate=295 kB; lsn=0/17AD8C0, redo lsn=0/17AD8C0
+2026-05-04 13:08:21.781 -04 [4027] LOG:  database system is shut down
+2026-05-04 13:08:24.568 -04 [6099] LOG:  starting PostgreSQL 18.2 on aarch64-unknown-linux-android, compiled by Android (13989888, +pgo, +bolt, +lto, +mlgo, based on r563880c) clang version 21.0.0 (https://android.googlesource.com/toolchain/llvm-project 5e96669f06077099aa41290cdb4c5e6fa0f59349), 64-bit
+2026-05-04 13:08:24.569 -04 [6099] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-04 13:08:24.571 -04 [6099] LOG:  listening on Unix socket "/data/data/com.termux/files/usr/tmp/.s.PGSQL.5432"
+2026-05-04 13:08:24.592 -04 [6109] LOG:  database system was shut down at 2026-05-04 13:08:24 -04
+2026-05-04 13:08:24.608 -04 [6099] LOG:  database system is ready to accept connections
+2026-05-04 13:13:24.685 -04 [6107] LOG:  checkpoint starting: time
+2026-05-04 13:15:04.213 -04 [6107] LOG:  checkpoint complete: wrote 987 buffers (6.0%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=99.419 s, sync=0.075 s, total=99.528 s; sync files=314, longest=0.002 s, average=0.001 s; distance=4682 kB, estimate=4682 kB; lsn=0/1BF6508, redo lsn=0/1BF6478
+2026-05-04 13:28:24.516 -04 [6107] LOG:  checkpoint starting: time
+2026-05-04 13:28:24.677 -04 [6107] LOG:  checkpoint complete: wrote 1 buffers (0.0%), wrote 0 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.106 s, sync=0.002 s, total=0.161 s; sync files=1, longest=0.002 s, average=0.002 s; distance=2 kB, estimate=4214 kB; lsn=0/1BF7050, redo lsn=0/1BF6FF8
+2026-05-04 18:13:13.604 -04 [19325] LOG:  starting PostgreSQL 18.2 on aarch64-unknown-linux-android, compiled by Android (13989888, +pgo, +bolt, +lto, +mlgo, based on r563880c) clang version 21.0.0 (https://android.googlesource.com/toolchain/llvm-project 5e96669f06077099aa41290cdb4c5e6fa0f59349), 64-bit
+2026-05-04 18:13:13.605 -04 [19325] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-04 18:13:13.607 -04 [19325] LOG:  listening on Unix socket "/data/data/com.termux/files/usr/tmp/.s.PGSQL.5432"
+2026-05-04 18:13:13.652 -04 [19333] LOG:  database system was interrupted; last known up at 2026-05-04 13:28:24 -04
+2026-05-04 18:13:13.713 -04 [19333] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-05-04 18:13:13.716 -04 [19333] LOG:  redo starts at 0/1BF6FF8
+2026-05-04 18:13:13.716 -04 [19333] LOG:  invalid record length at 0/1BF7100: expected at least 24, got 0
+2026-05-04 18:13:13.716 -04 [19333] LOG:  redo done at 0/1BF70C8 system usage: CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+2026-05-04 18:13:13.721 -04 [19331] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-05-04 18:13:13.730 -04 [19331] LOG:  checkpoint complete: wrote 0 buffers (0.0%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.001 s, total=0.009 s; sync files=2, longest=0.001 s, average=0.001 s; distance=0 kB, estimate=0 kB; lsn=0/1BF7100, redo lsn=0/1BF7100
+2026-05-04 18:13:13.742 -04 [19325] LOG:  database system is ready to accept connections
+2026-05-04 18:13:20.994 -04 [19414] FATAL:  role "u0_a365" does not exist
+2026-05-04 19:42:57.387 -04 [13857] FATAL:  role "seu_usuario" does not exist
+2026-05-04 19:43:24.809 -04 [13909] FATAL:  role "seu_usuario" does not exist
+2026-05-04 20:02:26.112 -04 [15743] FATAL:  role "likesplus" does not exist
+2026-05-04 20:03:49.709 -04 [16042] FATAL:  role "postgres" does not exist
+2026-05-05 14:34:38.254 -04 [24128] LOG:  starting PostgreSQL 18.2 on aarch64-unknown-linux-android, compiled by Android (13989888, +pgo, +bolt, +lto, +mlgo, based on r563880c) clang version 21.0.0 (https://android.googlesource.com/toolchain/llvm-project 5e96669f06077099aa41290cdb4c5e6fa0f59349), 64-bit
+2026-05-05 14:34:38.255 -04 [24128] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-05 14:34:38.257 -04 [24128] LOG:  listening on Unix socket "/data/data/com.termux/files/usr/tmp/.s.PGSQL.5432"
+2026-05-05 14:34:38.337 -04 [24137] LOG:  database system was interrupted; last known up at 2026-05-04 18:13:13 -04
+2026-05-05 14:34:38.484 -04 [24137] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-05-05 14:34:38.491 -04 [24137] LOG:  redo starts at 0/1BF7178
+2026-05-05 14:34:38.491 -04 [24137] LOG:  invalid record length at 0/1BF71B0: expected at least 24, got 0
+2026-05-05 14:34:38.491 -04 [24137] LOG:  redo done at 0/1BF7178 system usage: CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+2026-05-05 14:34:38.506 -04 [24135] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-05-05 14:34:38.535 -04 [24135] LOG:  checkpoint complete: wrote 0 buffers (0.0%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.008 s, sync=0.004 s, total=0.031 s; sync files=2, longest=0.003 s, average=0.002 s; distance=0 kB, estimate=0 kB; lsn=0/1BF71B0, redo lsn=0/1BF71B0
+2026-05-05 14:34:38.573 -04 [24128] LOG:  database system is ready to accept connections
+2026-05-05 14:34:43.986 -04 [24149] FATAL:  role "u0_a365" does not exist
+2026-05-05 14:36:35.420 -04 [24355] FATAL:  role "u0_a365" does not exist
+2026-05-05 14:36:35.427 -04 [24356] FATAL:  role "u0_a365" does not exist
+2026-05-05 14:36:52.460 -04 [24430] FATAL:  role "u0_a365" does not exist
+2026-05-05 14:37:24.078 -04 [24476] FATAL:  role "u0_a365" does not exist
+2026-05-05 14:37:33.117 -04 [24536] FATAL:  role "pkg" does not exist
+2026-05-05 14:37:39.956 -04 [24128] LOG:  received fast shutdown request
+2026-05-05 14:37:39.959 -04 [24128] LOG:  aborting any active transactions
+2026-05-05 14:37:40.006 -04 [24128] LOG:  background worker "logical replication launcher" (PID 24140) exited with exit code 1
+2026-05-05 14:37:40.007 -04 [24135] LOG:  shutting down
+2026-05-05 14:37:40.009 -04 [24135] LOG:  checkpoint starting: shutdown immediate
+2026-05-05 14:37:40.046 -04 [24135] LOG:  checkpoint complete: wrote 0 buffers (0.0%), wrote 0 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.001 s, total=0.040 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=0 kB; lsn=0/1BF7260, redo lsn=0/1BF7260
+2026-05-05 14:37:40.097 -04 [24128] LOG:  database system is shut down
+2026-05-05 14:37:43.965 -04 [24575] LOG:  starting PostgreSQL 18.2 on aarch64-unknown-linux-android, compiled by Android (13989888, +pgo, +bolt, +lto, +mlgo, based on r563880c) clang version 21.0.0 (https://android.googlesource.com/toolchain/llvm-project 5e96669f06077099aa41290cdb4c5e6fa0f59349), 64-bit
+2026-05-05 14:37:43.967 -04 [24575] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-05 14:37:43.968 -04 [24575] LOG:  listening on Unix socket "/data/data/com.termux/files/usr/tmp/.s.PGSQL.5432"
+2026-05-05 14:37:43.990 -04 [24583] LOG:  database system was shut down at 2026-05-05 14:37:42 -04
+2026-05-05 14:37:44.014 -04 [24575] LOG:  database system is ready to accept connections
+2026-05-05 14:52:59.532 -04 [24581] LOG:  checkpoint starting: time
+2026-05-05 14:53:03.838 -04 [24581] LOG:  checkpoint complete: wrote 42 buffers (0.3%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=4.276 s, sync=0.004 s, total=4.314 s; sync files=11, longest=0.001 s, average=0.001 s; distance=317 kB, estimate=317 kB; lsn=0/17B3160, redo lsn=0/17B3108
+2026-05-05 18:46:44.734 -04 [24575] LOG:  received fast shutdown request
+2026-05-05 18:46:44.738 -04 [24575] LOG:  aborting any active transactions
+2026-05-05 18:46:44.781 -04 [24575] LOG:  background worker "logical replication launcher" (PID 24586) exited with exit code 1
+2026-05-05 18:46:44.783 -04 [24581] LOG:  shutting down
+2026-05-05 18:46:44.785 -04 [24581] LOG:  checkpoint starting: shutdown immediate
+2026-05-05 18:46:44.805 -04 [24581] LOG:  checkpoint complete: wrote 0 buffers (0.0%), wrote 0 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.004 s, sync=0.001 s, total=0.021 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=285 kB; lsn=0/17B3210, redo lsn=0/17B3210
+2026-05-05 18:46:44.863 -04 [24575] LOG:  database system is shut down
+2026-05-05 18:47:14.129 -04 [15346] LOG:  starting PostgreSQL 18.2 on aarch64-unknown-linux-android, compiled by Android (13989888, +pgo, +bolt, +lto, +mlgo, based on r563880c) clang version 21.0.0 (https://android.googlesource.com/toolchain/llvm-project 5e96669f06077099aa41290cdb4c5e6fa0f59349), 64-bit
+2026-05-05 18:47:14.131 -04 [15346] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-05 18:47:14.132 -04 [15346] LOG:  listening on Unix socket "/data/data/com.termux/files/usr/tmp/.s.PGSQL.5432"
+2026-05-05 18:47:14.153 -04 [15354] LOG:  database system was shut down at 2026-05-05 18:47:11 -04
+2026-05-05 18:47:14.180 -04 [15346] LOG:  database system is ready to accept connections
+2026-05-05 18:52:27.417 -04 [15352] LOG:  checkpoint starting: time
+2026-05-05 18:52:28.670 -04 [15346] LOG:  received SIGHUP, reloading configuration files
+2026-05-05 18:53:13.205 -04 [17048] FATAL:  role "botuser" does not exist
+2026-05-05 18:53:59.281 -04 [17208] FATAL:  lock file "postmaster.pid" already exists
+2026-05-05 18:53:59.281 -04 [17208] HINT:  Is another postmaster (PID 15346) running in data directory "/data/data/com.termux/files/home/.postgres"?
+2026-05-05 18:54:06.473 -04 [17214] FATAL:  role "botuser" does not exist
+2026-05-05 18:54:07.430 -04 [15352] LOG:  checkpoint complete: wrote 985 buffers (6.0%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=99.867 s, sync=0.118 s, total=100.014 s; sync files=312, longest=0.001 s, average=0.001 s; distance=4679 kB, estimate=4679 kB; lsn=0/1BF5A68, redo lsn=0/1BF59D8
+2026-05-05 18:54:52.893 -04 [17339] ERROR:  role "u0_a365" already exists
+2026-05-05 18:54:52.893 -04 [17339] STATEMENT:  CREATE ROLE u0_a365 WITH LOGIN SUPERUSER;
+2026-05-05 18:55:27.566 -04 [17545] FATAL:  role "botuser" does not exist
+2026-05-05 19:09:32.054 -04 [15346] LOG:  received SIGHUP, reloading configuration files
+2026-05-05 19:12:27.067 -04 [15352] LOG:  checkpoint starting: time
+2026-05-05 19:12:33.773 -04 [15352] LOG:  checkpoint complete: wrote 66 buffers (0.4%), wrote 1 SLRU buffers; 1 WAL file(s) added, 0 removed, 0 recycled; write=6.650 s, sync=0.007 s, total=6.707 s; sync files=50, longest=0.001 s, average=0.001 s; distance=258 kB, estimate=4237 kB; lsn=0/1C362A8, redo lsn=0/1C36250
+2026-05-05 19:14:25.428 -04 [21855] FATAL:  role "botuser" does not exist
+2026-05-05 19:19:48.496 -04 [22300] FATAL:  role "botuser" does not exist
+2026-05-05 19:27:46.106 -04 [23201] FATAL:  role "botuser" does not exist
+2026-05-05 19:30:21.876 -04 [23692] FATAL:  lock file "postmaster.pid" already exists
+2026-05-05 19:30:21.876 -04 [23692] HINT:  Is another postmaster (PID 15346) running in data directory "/data/data/com.termux/files/home/.postgres"?
+2026-05-05 19:30:24.590 -04 [23695] FATAL:  database "u0_a365" does not exist
+2026-05-05 19:33:24.147 -04 [15346] LOG:  received SIGHUP, reloading configuration files
+2026-05-05 19:33:47.131 -04 [24442] FATAL:  role "botuser" does not exist
+2026-05-05 19:34:01.025 -04 [24564] FATAL:  lock file "postmaster.pid" already exists
+2026-05-05 19:34:01.025 -04 [24564] HINT:  Is another postmaster (PID 15346) running in data directory "/data/data/com.termux/files/home/.postgres"?
+2026-05-05 19:34:02.482 -04 [24566] ERROR:  database "likesplus" already exists
+2026-05-05 19:34:02.482 -04 [24566] STATEMENT:  CREATE DATABASE likesplus;
+2026-05-05 19:34:08.597 -04 [24570] FATAL:  role "botuser" does not exist
+2026-05-05 19:37:25.079 -04 [25360] FATAL:  database "likesplus_db" does not exist
+2026-05-05 19:37:56.417 -04 [25457] ERROR:  column "referred_by" of relation "users" does not exist at character 60
+2026-05-05 19:37:56.417 -04 [25457] STATEMENT:  INSERT INTO users (user_id, username, balance, created_at, referred_by, affiliate_balance, first_name, affiliate_balance_cents, main_balance_cents) VALUES (1046585284, NULL, 0.0, '2026-04-06 15:38:06', NULL, 0.0, NULL, 0, 0) ON CONFLICT (user_id) DO NOTHING
+2026-05-05 19:37:56.420 -04 [25457] ERROR:  relation "settings" does not exist at character 234
+2026-05-05 19:37:56.420 -04 [25457] STATEMENT:  
+	            SELECT a.attname, format_type(a.atttypid, a.atttypmod) AS data_type
+	            FROM   pg_index i
+	            JOIN   pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+	            WHERE  i.indrelid = 'settings'::regclass
+	            AND    i.indisprimary;
+	        
+2026-05-05 19:43:02.743 -04 [15352] LOG:  checkpoint starting: time
+2026-05-05 19:43:02.993 -04 [15352] LOG:  checkpoint complete: wrote 2 buffers (0.0%), wrote 0 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.208 s, sync=0.002 s, total=0.250 s; sync files=1, longest=0.002 s, average=0.002 s; distance=16 kB, estimate=3815 kB; lsn=0/1C3A430, redo lsn=0/1C3A3D8
+2026-05-05 20:03:13.262 -04 [15352] LOG:  checkpoint starting: time
+2026-05-05 20:03:24.349 -04 [15352] LOG:  checkpoint complete: wrote 108 buffers (0.7%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=11.004 s, sync=0.039 s, total=11.088 s; sync files=67, longest=0.002 s, average=0.001 s; distance=662 kB, estimate=3500 kB; lsn=0/1CE1DD8, redo lsn=0/1CDFC88
+2026-05-05 20:34:22.209 -04 [15352] LOG:  checkpoint starting: time
+2026-05-05 20:34:27.618 -04 [15352] LOG:  checkpoint complete: wrote 52 buffers (0.3%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=5.344 s, sync=0.011 s, total=5.410 s; sync files=40, longest=0.001 s, average=0.001 s; distance=271 kB, estimate=3177 kB; lsn=0/1D23C88, redo lsn=0/1D23C30
+2026-05-05 20:39:22.721 -04 [15352] LOG:  checkpoint starting: time
+2026-05-05 20:39:27.706 -04 [15352] LOG:  checkpoint complete: wrote 48 buffers (0.3%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=4.926 s, sync=0.009 s, total=4.986 s; sync files=19, longest=0.002 s, average=0.001 s; distance=355 kB, estimate=2895 kB; lsn=0/1D7CC38, redo lsn=0/1D7CBA8
+2026-05-05 23:25:11.839 -04 [15352] LOG:  checkpoint starting: time
+2026-05-05 23:25:12.312 -04 [15352] LOG:  checkpoint complete: wrote 4 buffers (0.0%), wrote 0 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.430 s, sync=0.003 s, total=0.474 s; sync files=4, longest=0.001 s, average=0.001 s; distance=21 kB, estimate=2607 kB; lsn=0/1D823F0, redo lsn=0/1D82398
+2026-05-05 23:32:45.483 -04 [31745] ERROR:  column "price" does not exist at character 44
+2026-05-05 23:32:45.483 -04 [31745] STATEMENT:  
+	            SELECT COUNT(*), COALESCE(SUM(price), 0)
+	            FROM orders
+	            WHERE status NOT IN ('Cancelado', 'Estornado', 'Canceled', 'Cancelled')
+	        
+2026-05-06 00:05:11.742 -04 [15352] LOG:  checkpoint starting: time
+2026-05-06 00:05:12.081 -04 [15352] LOG:  checkpoint complete: wrote 2 buffers (0.0%), wrote 0 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.221 s, sync=0.001 s, total=0.340 s; sync files=1, longest=0.001 s, average=0.001 s; distance=14 kB, estimate=2348 kB; lsn=0/1D85D28, redo lsn=0/1D85CD0

@@ -8,18 +8,13 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from providers.mp_api import create_pix_payment
 import mercadopago
-from database import get_connection
+from database.connection import get_connection  # caminho padronizado
 
 logger = logging.getLogger(__name__)
 
-# Trava para evitar múltiplas requisições PIX simultâneas do mesmo usuário
 user_locks = {}
 
-# ------------------------------------------------------------
-# FUNÇÕES AUXILIARES
-# ------------------------------------------------------------
 async def safe_edit(query, text: str, reply_markup=None, parse_mode="Markdown"):
-    """Edita mensagem com texto ou legenda, com fallback para nova mensagem."""
     try:
         await query.edit_message_text(text=text, reply_markup=reply_markup, parse_mode=parse_mode)
         return
@@ -38,23 +33,23 @@ def cents_to_float(cents: int) -> float:
 def float_to_cents(value: float) -> int:
     return int(Decimal(str(value)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP) * 100)
 
-# ------------------------------------------------------------
-# 1. EXIBIR SALDO (usa main_balance_cents)
-# ------------------------------------------------------------
 async def show_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     conn = get_connection()
     cursor = conn.cursor()
     try:
-        # Garante que o usuário existe (com saldo 0 em centavos)
+        # Upsert compatível com PostgreSQL (ON CONFLICT)
         cursor.execute(
-            "INSERT INTO users (user_id, main_balance_cents) VALUES (%s, %s) ON CONFLICT (user_id) DO NOTHING",
-            (user_id, 0)
+            "INSERT INTO users (user_id, balance) VALUES (%s, 0) "
+            "ON CONFLICT (user_id) DO NOTHING",
+            (user_id,)
         )
         conn.commit()
-        cursor.execute("SELECT main_balance_cents FROM users WHERE user_id = %s", (user_id,))
+
+        cursor.execute("SELECT balance FROM users WHERE user_id = %s", (user_id,))
         result = cursor.fetchone()
-        balance = (result[0] if result else 0) / 100.0
+        saldo_centavos = int(result[0]) if result else 0
+        balance = saldo_centavos / 100.0
 
         await update.message.reply_text(
             f"💰 **SEU PAINEL FINANCEIRO**\n\n"
@@ -64,23 +59,18 @@ async def show_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
     except Exception as e:
-        logger.error(f"Erro ao exibir saldo do usuário {user_id}: {e}")
-        await update.message.reply_text("❌ Erro interno ao buscar saldo. Tente mais tarde.")
+        logger.error(f"Erro ao exibir saldo: {e}")
+        await update.message.reply_text("❌ Erro interno ao buscar saldo.")
     finally:
         conn.close()
 
-# ------------------------------------------------------------
-# 2. COMANDO /pix (menu ou geração de pagamento)
-# ------------------------------------------------------------
 async def pix_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     query = update.callback_query
     target = query.message if query else update.message
-
     if query:
         await query.answer()
 
-    # --- CASO 1: sem argumentos → mostra menu com limites ---
     if not context.args:
         text = (
             "💰 **RECARGA PIX**\n\n"
@@ -90,7 +80,6 @@ async def pix_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         keyboard = [[InlineKeyboardButton("🏠 Menu Principal", callback_data="back_to_start")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-
         try:
             if query and (query.message.photo or query.message.caption):
                 await query.edit_message_caption(caption=text, reply_markup=reply_markup, parse_mode="Markdown")
@@ -102,7 +91,6 @@ async def pix_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Erro ao editar menu pix: {e}")
         return
 
-    # --- CASO 2: com argumento → processa o valor ---
     raw_amount = context.args[0].replace(',', '.')
     if not re.match(r'^\d+(\.\d{1,2})?$', raw_amount):
         await target.reply_text("❌ **Formato inválido!** Use apenas números (ex: 50 ou 50.00)")
@@ -119,9 +107,7 @@ async def pix_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await target.reply_text("❌ **Valor Inválido!** Use números (ex: `/pix 50.50`).")
         return
 
-    # --- FLOOD PROTECTION (evita spam de geração de PIX) ---
     now = datetime.now()
-    # Limpeza periódica de locks antigos (mais de 1 hora)
     for uid in list(user_locks.keys()):
         if (now - user_locks[uid]).total_seconds() > 3600:
             del user_locks[uid]
@@ -133,7 +119,6 @@ async def pix_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
     user_locks[user_id] = now
 
-    # --- GERAÇÃO DO PAGAMENTO ---
     status_msg = await target.reply_text("⏳ Gerando seu código PIX... Aguarde.")
     try:
         await target.reply_chat_action("typing")
@@ -142,7 +127,6 @@ async def pix_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if payment and "qrcode" in payment:
             pix_id = payment["id"]
             qrcode = payment["qrcode"]
-
             msg = (
                 f"💎 **PIX GERADO COM SUCESSO!**\n\n"
                 f"💰 Valor: **R$ {amount_display:.2f}**\n"
@@ -150,7 +134,6 @@ async def pix_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"`{qrcode}`\n\n"
                 f"⚠️ *O saldo cairá na hora após o pagamento.*"
             )
-
             await status_msg.delete()
             await target.reply_text(msg, parse_mode="Markdown")
             asyncio.create_task(check_payment_loop(context, user_id, pix_id, amount_cents))
@@ -158,19 +141,15 @@ async def pix_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             error_detail = payment.get("message", "sem detalhes") if payment else "resposta vazia"
             logger.error(f"API MP falhou para o usuário {user_id}: {error_detail}")
             await status_msg.edit_text("❌ Não foi possível gerar o PIX no Mercado Pago agora. Tente mais tarde.")
-
     except Exception as e:
         logger.critical(f"Erro fatal no processo de PIX: {e}")
         await status_msg.edit_text("⚠️ Erro interno no sistema de pagamentos.")
 
-# ------------------------------------------------------------
-# 3. LOOP DE VERIFICAÇÃO DE PAGAMENTO (com centavos)
-# ------------------------------------------------------------
 async def check_payment_loop(context: ContextTypes.DEFAULT_TYPE, user_id: int, pix_id: str, amount_cents: int):
     sdk = mercadopago.SDK(str(MP_ACCESS_TOKEN))
     amount_display = cents_to_float(amount_cents)
 
-    for attempt in range(40):  # 40 * 30s = 20 minutos
+    for attempt in range(40):
         await asyncio.sleep(30)
         try:
             res = sdk.payment().get(pix_id)
@@ -180,22 +159,22 @@ async def check_payment_loop(context: ContextTypes.DEFAULT_TYPE, user_id: int, p
                 conn = get_connection()
                 cursor = conn.cursor()
                 try:
-                    cursor.execute("SELECT 1 FROM users WHERE user_id = %s", (user_id,))
-                    if not cursor.fetchone():
-                        cursor.execute(
-                            "INSERT INTO users (user_id, main_balance_cents) VALUES (%s, %s)",
-                            (user_id, 0)
-                        )
-                        conn.commit()
-
+                    # Garante existência do usuário
                     cursor.execute(
-                        "UPDATE users SET main_balance_cents = main_balance_cents + %s WHERE user_id = %s",
+                        "INSERT INTO users (user_id, balance) VALUES (%s, 0) "
+                        "ON CONFLICT (user_id) DO NOTHING",
+                        (user_id,)
+                    )
+                    conn.commit()
+
+                    # Atualiza saldo em centavos
+                    cursor.execute(
+                        "UPDATE users SET balance = balance + %s WHERE user_id = %s",
                         (amount_cents, user_id)
                     )
                     if cursor.rowcount > 0:
                         conn.commit()
-                        logger.info(f"💰 Crédito de {amount_display:.2f} (centavos: {amount_cents}) para usuário {user_id}")
-
+                        logger.info(f"💰 Crédito de {amount_display:.2f} para {user_id}")
                         keyboard = [
                             [
                                 InlineKeyboardButton("🛒 Ir para a Loja", callback_data="back_to_categories"),
@@ -203,32 +182,24 @@ async def check_payment_loop(context: ContextTypes.DEFAULT_TYPE, user_id: int, p
                             ]
                         ]
                         reply_markup = InlineKeyboardMarkup(keyboard)
-
                         await context.bot.send_message(
                             chat_id=user_id,
-                            text=(
-                                f"✅ **PAGAMENTO CONFIRMADO!**\n\n"
-                                f"Sua recarga de **R$ {amount_display:.2f}** foi creditada com sucesso!\n"
-                                f"O seu novo saldo já está disponível para uso. Aproveite!"
-                            ),
+                            text=f"✅ **PAGAMENTO CONFIRMADO!**\n\nSua recarga de **R$ {amount_display:.2f}** foi creditada!",
                             reply_markup=reply_markup,
                             parse_mode="Markdown"
                         )
                     else:
-                        logger.warning(f"Falha ao atualizar saldo para usuário {user_id} (linhas não afetadas)")
+                        logger.warning(f"Falha ao atualizar saldo para {user_id}")
                 except Exception as e:
-                    logger.error(f"Erro SQL ao creditar saldo: {e}")
+                    logger.error(f"Erro SQL ao creditar: {e}")
                     conn.rollback()
                 finally:
                     conn.close()
                 return
-
             elif status in ["cancelled", "rejected"]:
-                logger.info(f"Pagamento {pix_id} cancelado/rejeitado para usuário {user_id}")
+                logger.info(f"Pagamento {pix_id} cancelado")
                 return
-
         except Exception as e:
-            logger.error(f"Erro no loop de verificação (tentativa {attempt+1}): {e}")
+            logger.error(f"Erro no loop: {e}")
             await asyncio.sleep(10)
-
-    logger.info(f"⏰ Loop expirado para PIX {pix_id} (usuário {user_id}) - não confirmado em 20min")
+    logger.info(f"Loop expirado para PIX {pix_id}")

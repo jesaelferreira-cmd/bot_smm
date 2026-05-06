@@ -4,6 +4,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Configurações do banco de dados PostgreSQL
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_PORT = int(os.getenv("DB_PORT", "5432"))
+DB_NAME = os.getenv("DB_NAME", "likesplus")
+DB_USER = os.getenv("DB_USER", "u0_a365")
+DB_PASS = os.getenv("DB_PASS", "")
+
+
 # ========== DIRETÓRIO BASE DINÂMICO ==========
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -14,7 +22,7 @@ if DATABASE_URL:
     # Modo Railway: usa PostgreSQL
     DB_ENGINE = "postgresql"
     DB_CONNECTION_STRING = DATABASE_URL
-    DB_PATH = None  # não usado
+    DB_PATH = "database/bot_smm.db"  # não usado
 else:
     # Modo local: usa SQLite
     DB_ENGINE = "sqlite"

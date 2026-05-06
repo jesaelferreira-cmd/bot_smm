@@ -1,6 +1,6 @@
-from config import DB_ENGINE, DB_PATH, DB_CONNECTION_STRING
 import sqlite3
 import psycopg2
+from config import DB_ENGINE, DB_PATH, DB_CONNECTION_STRING
 
 def get_connection():
     if DB_ENGINE == "postgresql":

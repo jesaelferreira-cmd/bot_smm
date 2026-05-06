@@ -7,6 +7,7 @@ import datetime
 import os
 from dotenv import load_dotenv
 from pathlib import Path
+
 load_dotenv()
 
 startup_time = datetime.datetime.now()
@@ -45,7 +46,8 @@ from handlers.services import (
     ASKING_QUANTITY,
     WAIT_CONFIRM_PRICE,
     ASKING_LINK,
-    CONFIRMING
+    CONFIRMING,
+    ContextTypes
 )
 from handlers.admin import debug_categories, fix_order
 from handlers.admin import limpar_fornecedor
@@ -63,6 +65,14 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.error(msg="Exceção ao processar update:", exc_info=context.error)
+    if update and update.effective_chat:
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="⚠️ Ocorreu um erro interno. Nossa equipe foi notificada."
+        )
 
 def main():
     try:
@@ -167,6 +177,8 @@ def main():
         # 5. BOTÕES GENÉRICOS (último para capturar qualquer padrão)
         # =========================================================
         app.add_handler(CallbackQueryHandler(buttons.button_handler))
+
+        app.add_error_handler(error_handler)   # <-- corrigido
 
         logger.info("LikesPlus está rodando! 🚀")
         app.run_polling()

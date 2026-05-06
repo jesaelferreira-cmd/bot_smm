@@ -2,7 +2,6 @@ import logging
 import re
 import hashlib
 from typing import List, Tuple, Optional
-from config import DB_PATH
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes, ConversationHandler
 from database import get_connection
@@ -219,9 +218,11 @@ async def list_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
             continue
         prov = int(match.group(1))
         real_cat = PROVIDER_PATTERN.sub('', display_name).strip()
+        # Remover emoji inicial para bater com o banco
+        real_cat_clean = EMOJI_REGEX.sub('', real_cat).strip()
         hash1 = _get_cat_hash(display_name)
         callback_data1 = f"cat_{hash1}"
-        cat_hash_map[callback_data1] = (real_cat, prov)
+        cat_hash_map[callback_data1] = (real_cat_clean, prov)
         row = [InlineKeyboardButton(display_name, callback_data=callback_data1)]
         if i + 1 < len(categories):
             display_name2 = categories[i+1]
@@ -229,9 +230,10 @@ async def list_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if match2:
                 prov2 = int(match2.group(1))
                 real_cat2 = PROVIDER_PATTERN.sub('', display_name2).strip()
+                real_cat2_clean = EMOJI_REGEX.sub('', real_cat2).strip()
                 hash2 = _get_cat_hash(display_name2)
                 callback_data2 = f"cat_{hash2}"
-                cat_hash_map[callback_data2] = (real_cat2, prov2)
+                cat_hash_map[callback_data2] = (real_cat2_clean, prov2)
                 row.append(InlineKeyboardButton(display_name2, callback_data=callback_data2))
         keyboard.append(row)
 
@@ -413,3 +415,10 @@ async def cancel_to_services(update: Update, context: ContextTypes.DEFAULT_TYPE)
     query = update.callback_query
     await query.answer("Pedido cancelado.")
     return await back_to_categories(update, context)
+
+async def category_page_nav(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Navegação entre páginas de categorias."""
+    query = update.callback_query
+    await query.answer()
+    page = int(query.data.split('_')[1])
+    return await list_services(update, context, page=page)

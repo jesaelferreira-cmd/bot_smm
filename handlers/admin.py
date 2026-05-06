@@ -1,5 +1,4 @@
 import asyncio
-import sqlite3
 import requests
 import time
 import subprocess
@@ -7,13 +6,10 @@ import os
 import logging
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
-from config import DB_PATH, SMM_API_URL_1, SMM_API_KEY_1, SMM_API_URL_2, SMM_API_KEY_2, ADMIN_ID, is_admin
+from config import SMM_API_URL_1, SMM_API_KEY_1, SMM_API_URL_2, SMM_API_KEY_2, ADMIN_ID, is_admin
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from database import get_connection
-
-conn = get_connection()
-cursor = conn.cursor()
+from database.connection import get_connection  # apenas esta importação
 
 logger = logging.getLogger(__name__)
 START_TIME = time.time()
@@ -28,19 +24,24 @@ def float_to_cents(value: float) -> int:
     return int(Decimal(str(value)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP) * 100)
 
 def get_admin_stats():
-    conn = sqlite3.connect(DB_PATH)
+    """Retorna (usuários, vendas, faturamento) usando PostgreSQL."""
+    conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM users")
-    users = cursor.fetchone()[0]
-    cursor.execute("""
-        SELECT COUNT(*), COALESCE(SUM(amount_cents), 0)
-        FROM orders
-        WHERE status NOT IN ('Cancelado', 'Estornado', 'Canceled', 'Cancelled')
-    """)
-    sales, total_cents = cursor.fetchone()
-    money = total_cents / 100.0
-    conn.close()
-    return users, sales, money
+    try:
+        cursor.execute("SELECT COUNT(*) FROM users")
+        users = cursor.fetchone()[0]
+
+        # Soma de pedidos não cancelados; a coluna de valor é price (centavos)
+        cursor.execute("""
+            SELECT COUNT(*), COALESCE(SUM(price), 0)
+            FROM orders
+            WHERE status NOT IN ('Cancelado', 'Estornado', 'Canceled', 'Cancelled')
+        """)
+        sales, total_cents = cursor.fetchone()
+        money = total_cents / 100.0 if total_cents else 0.0
+        return users, sales, money
+    finally:
+        conn.close()
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -97,14 +98,19 @@ async def set_margin(update: Update, context: ContextTypes.DEFAULT_TYPE):
             raise ValueError
         context.bot_data['margin'] = valor
 
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value REAL)")
-        cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('margem', ?)", (valor,))
-        conn.commit()
-        conn.close()
-
-        await update.message.reply_text(f"🚀 **Margem alterada para {valor}x.**\nRode `/atualizar` para sincronizar.")
+        try:
+            cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value REAL)")
+            cursor.execute(
+                "INSERT INTO settings (key, value) VALUES ('margem', %s) "
+                "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                (valor,)
+            )
+            conn.commit()
+            await update.message.reply_text(f"🚀 **Margem alterada para {valor}x.**\nRode `/atualizar` para sincronizar.")
+        finally:
+            conn.close()
     except:
         await update.message.reply_text("❌ Use: `/margem 2.0` (ex: 2.0 = 100% de lucro)")
 
@@ -118,13 +124,19 @@ async def set_promo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         valor = float(context.args[0])
         if not (0 <= valor <= 1):
             raise ValueError
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value REAL)")
-        cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('promo', ?)", (valor,))
-        conn.commit()
-        conn.close()
-        await update.message.reply_text(f"🎁 Promoção de {valor*100:.0f}% gravada! Rode `/atualizar`.")
+        try:
+            cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value REAL)")
+            cursor.execute(
+                "INSERT INTO settings (key, value) VALUES ('promo', %s) "
+                "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                (valor,)
+            )
+            conn.commit()
+            await update.message.reply_text(f"🎁 Promoção de {valor*100:.0f}% gravada! Rode `/atualizar`.")
+        finally:
+            conn.close()
     except:
         await update.message.reply_text("❌ Use: `/promo 0.15` (para 15% de desconto)")
 
@@ -136,7 +148,6 @@ async def update_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text("⏳ Atualizando serviços e verificando banco de dados...")
-
     try:
         script_path = os.path.join(os.path.dirname(__file__), '..', 'update_db.py')
         result = subprocess.run(["python", script_path], capture_output=True, text=True, timeout=120)
@@ -181,7 +192,7 @@ async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT user_id FROM users")
         usuarios = cursor.fetchall()
@@ -246,30 +257,38 @@ async def set_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
             raise ValueError
         valor_cents = float_to_cents(valor_float)
 
-        conn = sqlite3.connect(DB_PATH)
+        conn = get_connection()
         cursor = conn.cursor()
-
-        cursor.execute("SELECT first_name FROM users WHERE user_id = ?", (target_id,))
-        user_exists = cursor.fetchone()
-        if not user_exists:
-            cursor.execute("INSERT INTO users (user_id, main_balance_cents, first_name) VALUES (?, ?, ?)",
-                           (target_id, 0, f"User_{target_id}"))
+        try:
+            # Garante que o usuário existe
+            cursor.execute(
+                "INSERT INTO users (user_id, balance, first_name) VALUES (%s, 0, %s) "
+                "ON CONFLICT (user_id) DO NOTHING",
+                (target_id, f"User_{target_id}")
+            )
             conn.commit()
 
-        cursor.execute("UPDATE users SET main_balance_cents = ? WHERE user_id = ?", (valor_cents, target_id))
-        conn.commit()
-        conn.close()
+            cursor.execute(
+                "UPDATE users SET balance = %s WHERE user_id = %s",
+                (valor_cents, target_id)
+            )
+            conn.commit()
 
-        await update.message.reply_text(f"✅ Saldo de `{target_id}` atualizado para **R$ {cents_to_float(valor_cents):.2f}**", parse_mode="Markdown")
-
-        try:
-            await context.bot.send_message(
-                chat_id=target_id,
-                text=f"💰 Seu saldo foi alterado pelo administrador para: **R$ {cents_to_float(valor_cents):.2f}**",
+            await update.message.reply_text(
+                f"✅ Saldo de `{target_id}` atualizado para **R$ {cents_to_float(valor_cents):.2f}**",
                 parse_mode="Markdown"
             )
-        except:
-            pass
+
+            try:
+                await context.bot.send_message(
+                    chat_id=target_id,
+                    text=f"💰 Seu saldo foi alterado pelo administrador para: **R$ {cents_to_float(valor_cents):.2f}**",
+                    parse_mode="Markdown"
+                )
+            except:
+                pass
+        finally:
+            conn.close()
 
     except ValueError:
         await update.message.reply_text("❌ Formato inválido. Use números para ID e valor (ex: 10.50).")
@@ -278,59 +297,37 @@ async def set_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Erro interno ao atualizar saldo.")
 
 # =========================================================
-# (Opcional) Migração manual
+# (Opcional) Migração - Adaptada para PostgreSQL, se necessário
 # =========================================================
 async def migrate_balance_column(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Não mais necessária; mantida para compatibilidade."""
     if not is_admin(update.effective_user.id):
         return
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("PRAGMA table_info(users)")
-        cols = [c[1] for c in cursor.fetchall()]
-        if 'balance' in cols and 'main_balance_cents' in cols:
-            cursor.execute("UPDATE users SET main_balance_cents = CAST(ROUND(COALESCE(balance, 0) * 100) AS INTEGER)")
-            conn.commit()
-            await update.message.reply_text("✅ Migração da coluna 'balance' para 'main_balance_cents' concluída.")
-        else:
-            await update.message.reply_text("⚠️ Colunas necessárias não encontradas.")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Erro: {e}")
-    finally:
-        conn.close()
+    await update.message.reply_text("✅ Migração de colunas não é necessária no PostgreSQL atual.")
 
 async def sync_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando para sincronizar serviços do fornecedor (apenas admin)"""
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("❌ Apenas o administrador pode usar este comando.")
         return
-    
+
     await update.message.reply_text("⏳ Sincronizando serviços com o fornecedor...")
-    
     try:
-        import subprocess
-        import sys
-        import os
-        
-        # Caminho para o update_db.py
         script_path = os.path.join(os.path.dirname(__file__), '..', 'update_db.py')
-        
-        # Executa o script
         result = subprocess.run(
-            [sys.executable, script_path],
+            ["python", script_path],
             capture_output=True,
             text=True,
             timeout=120
         )
-        
         if result.returncode == 0:
-            # Conta quantos serviços foram inseridos
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM services")
-            count = cursor.fetchone()[0]
-            conn.close()
-            
+            conn = get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM services")
+                count = cursor.fetchone()[0]
+            finally:
+                conn.close()
             await update.message.reply_text(
                 f"✅ **Sincronização concluída!**\n\n"
                 f"📊 Total de serviços no banco: `{count}`\n"
@@ -339,7 +336,6 @@ async def sync_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         else:
             await update.message.reply_text(f"❌ Erro na sincronização:\n```\n{result.stderr[:500]}\n```")
-            
     except Exception as e:
         await update.message.reply_text(f"❌ Erro ao executar: `{str(e)}`")
 
@@ -349,22 +345,19 @@ async def test_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Apenas o administrador.")
         return
 
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM services")
+        total = cursor.fetchone()[0]
 
-    # Total de serviços
-    cursor.execute("SELECT COUNT(*) FROM services")
-    total = cursor.fetchone()[0]
+        cursor.execute("SELECT DISTINCT category FROM services ORDER BY category LIMIT 15")
+        categorias = [row[0] for row in cursor.fetchall()]
 
-    # Categorias distintas
-    cursor.execute("SELECT DISTINCT category FROM services ORDER BY category LIMIT 15")
-    categorias = [row[0] for row in cursor.fetchall()]
-
-    # Primeiros 5 serviços
-    cursor.execute("SELECT service_id, name, rate, category FROM services LIMIT 5")
-    servicos = cursor.fetchall()
-
-    conn.close()
+        cursor.execute("SELECT service_id, name, rate, category FROM services LIMIT 5")
+        servicos = cursor.fetchall()
+    finally:
+        conn.close()
 
     msg = f"📊 **Total de serviços:** `{total}`\n\n"
     msg += "📂 **Categorias (amostra):**\n"
@@ -373,7 +366,7 @@ async def test_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg += "\n🛒 **Primeiros serviços:**\n"
     for s in servicos:
-        msg += f"• ID `{s[0]}` – {s[1]} (R$ {s[2]:.2f}) – *{s[3]}*\n"
+        msg += f"• ID `{s[0]}` – {s[1]} (R$ {float(s[2]):.2f}) – *{s[3]}*\n"
 
     await update.message.reply_text(msg, parse_mode="Markdown")
 
@@ -382,28 +375,23 @@ async def debug_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Apenas administrador.")
         return
 
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM services")
+        total = cursor.fetchone()[0]
 
-    # 1. Total de serviços
-    cursor.execute("SELECT COUNT(*) FROM services")
-    total = cursor.fetchone()[0]
+        cursor.execute("SELECT DISTINCT category FROM services WHERE rate > 0 LIMIT 10")
+        raw_cats = [row[0] for row in cursor.fetchall()]
 
-    # 2. Categorias cruas (primeiras 10)
-    cursor.execute("SELECT DISTINCT category FROM services WHERE rate > 0 LIMIT 10")
-    raw_cats = [row[0] for row in cursor.fetchall()]
+        cursor.execute("SELECT service_id, name, category FROM services LIMIT 5")
+        sample_services = cursor.fetchall()
 
-    # 3. Amostra de serviços (primeiros 5)
-    cursor.execute("SELECT service_id, name, category FROM services LIMIT 5")
-    sample_services = cursor.fetchall()
+        from handlers.services import get_categories
+        final_cats = get_categories()
+    finally:
+        conn.close()
 
-    # 4. Categorias processadas pelo get_categories()
-    from handlers.services import get_categories
-    final_cats = get_categories()
-
-    conn.close()
-
-    # Monta mensagem sem Markdown (texto puro)
     msg = f"=== DIAGNÓSTICO ===\n\n"
     msg += f"Total de serviços: {total}\n\n"
     msg += "Categorias cruas (banco, primeiras 10):\n"
@@ -416,13 +404,11 @@ async def debug_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for s in sample_services:
         msg += f"- {s[0]} – {s[1][:50]} – {s[2]}\n"
 
-    # Envia sem parse_mode (evita erros de formatação)
     await update.message.reply_text(msg)
 
 async def test_api_fields(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
-    import requests
     url = os.getenv("SMM_API_URL_1")
     key = os.getenv("SMM_API_KEY_1")
     try:
@@ -441,11 +427,15 @@ async def check_descriptions(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("❌ Apenas administrador.")
         return
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT service_id, name, description FROM services WHERE description IS NOT NULL AND description != '' LIMIT 5")
-    rows = cursor.fetchall()
-    conn.close()
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT service_id, name, description FROM services WHERE description IS NOT NULL AND description != '' LIMIT 5"
+        )
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
     if rows:
         msg = "📝 **Serviços com descrição (até 5):**\n\n"
         for r in rows:
@@ -457,35 +447,32 @@ async def check_descriptions(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def list_providers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    # Contagem por fornecedor
-    cursor.execute("SELECT provider, COUNT(*) FROM services GROUP BY provider")
-    counts = cursor.fetchall()
-    msg = "📊 Serviços por fornecedor:\n"
-    for prov, count in counts:
-        msg += f"  Fornecedor {prov}: {count}\n"
-    # Amostra de categorias do fornecedor 2
-    cursor.execute("SELECT DISTINCT category FROM services WHERE provider = 2 LIMIT 10")
-    cats2 = cursor.fetchall()
-    msg += "\n📂 Categorias do Fornecedor 2 (amostra):\n"
-    for cat in cats2:
-        msg += f"  - {cat[0]}\n"
-    # Amostra de categorias do fornecedor 1
-    cursor.execute("SELECT DISTINCT category FROM services WHERE provider = 1 LIMIT 10")
-    cats1 = cursor.fetchall()
-    msg += "\n📂 Categorias do Fornecedor 1 (amostra):\n"
-    for cat in cats1:
-        msg += f"  - {cat[0]}\n"
-    conn.close()
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT provider, COUNT(*) FROM services GROUP BY provider")
+        counts = cursor.fetchall()
+        msg = "📊 Serviços por fornecedor:\n"
+        for prov, count in counts:
+            msg += f"  Fornecedor {prov}: {count}\n"
+
+        cursor.execute("SELECT DISTINCT category FROM services WHERE provider = 2 LIMIT 10")
+        cats2 = cursor.fetchall()
+        msg += "\n📂 Categorias do Fornecedor 2 (amostra):\n"
+        for cat in cats2:
+            msg += f"  - {cat[0]}\n"
+
+        cursor.execute("SELECT DISTINCT category FROM services WHERE provider = 1 LIMIT 10")
+        cats1 = cursor.fetchall()
+        msg += "\n📂 Categorias do Fornecedor 1 (amostra):\n"
+        for cat in cats1:
+            msg += f"  - {cat[0]}\n"
+    finally:
+        conn.close()
     await update.message.reply_text(msg)
 
 async def debug_categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Comando /debug_cats - Mostra quantas categorias de cada provedor
-    estão sendo retornadas por get_categories().
-    """
-    from handlers.services import get_categories   # import local para evitar circular
+    from handlers.services import get_categories
 
     cats = get_categories()
     if not cats:
@@ -500,9 +487,7 @@ async def debug_categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔵 Fornecedor 1: {len(c1)}\n"
         f"🟢 Fornecedor 2: {len(c2)}\n\n"
     )
-
     if c2:
-        # Mostra as primeiras 15 categorias do C2 para inspeção
         preview = "\n".join(c2[:15])
         msg += f"**Exemplos C2:**\n{preview}"
     else:
@@ -533,23 +518,24 @@ async def fix_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
         quantity = int(args[-1])
     except ValueError:
         await update.message.reply_text("❌ Parâmetros inválidos. Verifique os tipos (números onde esperado).")
-        return
 
     amount_cents = int(amount_float * 100)
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-
+    conn = get_connection()
     try:
-        # Insere o pedido
-        cursor.execute("""
-            INSERT INTO orders (user_id, service_name, quantity, amount_cents, order_id_api, status, date, provider_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (user_id, service_name, quantity, amount_cents, order_id_api, "Pendente", datetime.now().strftime("%d/%m/%Y %H:%M"), provider_id))
-
-        # Debita o saldo
-        cursor.execute("UPDATE users SET main_balance_cents = main_balance_cents - ? WHERE user_id = ?", (amount_cents, user_id))
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO orders (user_id, service_name, quantity, price, order_id_api, status, date, provider_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (user_id, service_name, quantity, amount_cents, order_id_api, "Pendente",
+             datetime.now().strftime("%d/%m/%Y %H:%M"), provider_id)
+        )
+        cursor.execute(
+            "UPDATE users SET balance = balance - %s WHERE user_id = %s",
+            (amount_cents, user_id)
+        )
         conn.commit()
-
         await update.message.reply_text(
             f"✅ Pedido `{order_id_api}` corrigido.\n"
             f"👤 Usuário: `{user_id}`\n"
@@ -567,31 +553,39 @@ async def limpar_fornecedor(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     try:
         prov = int(context.args[0])
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM services WHERE provider = ?", (prov,))
-        conn.commit()
-        conn.close()
-        await update.message.reply_text(f"✅ Serviços do Fornecedor {prov} removidos.")
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM services WHERE provider = %s", (prov,))
+            conn.commit()
+            await update.message.reply_text(f"✅ Serviços do Fornecedor {prov} removidos.")
+        finally:
+            conn.close()
     except Exception as e:
         await update.message.reply_text(f"❌ Erro: {e}")
 
 async def add_link_column(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /addlink – adiciona a coluna 'link' na tabela orders, se não existir."""
+    """Comando /addlink – adiciona a coluna 'link' na tabela orders, se não existir (PostgreSQL)."""
     if not is_admin(update.effective_user.id):
         return
 
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    conn = get_connection()
     try:
-        cursor.execute("PRAGMA table_info(orders)")
-        columns = [col[1] for col in cursor.fetchall()]
-        if 'link' in columns:
-            await update.message.reply_text("✅ A coluna 'link' já existe na tabela orders.")
-        else:
-            cursor.execute("ALTER TABLE orders ADD COLUMN link TEXT")
-            conn.commit()
-            await update.message.reply_text("✅ Coluna 'link' adicionada com sucesso!")
+        cursor = conn.cursor()
+        cursor.execute("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'orders' AND column_name = 'link'
+                ) THEN
+                    ALTER TABLE orders ADD COLUMN link TEXT;
+                END IF;
+            END;
+            $$
+        """)
+        conn.commit()
+        await update.message.reply_text("✅ Coluna 'link' verificada/adicionada com sucesso!")
     except Exception as e:
         await update.message.reply_text(f"❌ Erro: {e}")
     finally:

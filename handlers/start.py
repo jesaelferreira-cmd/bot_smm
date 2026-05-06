@@ -1,74 +1,141 @@
-import sqlite3
 import logging
+from datetime import datetime
+from html import escape as escape_html
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from datetime import datetime
+
+from database.connection import get_connection
 from config import ADMIN_ID
-from database import get_connection
 
 logger = logging.getLogger(__name__)
 
+# ===== TEXTOS =====
+WELCOME_HEADER = "✨ <b>LikesPlus</b> ✨\n🤖 Assistente Virtual\n\n"
+INSTRUCTIONS = (
+    "📌 <b>INSTRUÇÕES IMPORTANTES</b>\n"
+    "   🔓 O perfil deve permanecer <b>PÚBLICO</b> durante todo o processo\n"
+    "   🔍 Verifique atentamente o link/usuário antes de enviar\n"
+    "   ❌ Não há reembolso em caso de erro do usuário\n"
+    "   ⚠️ Utilize os serviços com moderação\n\n"
+)
+SUPPORT_TEMPLATE = (
+    "📞 <b>Suporte</b>\n"
+    "Em caso de dúvidas ou problemas com pedidos, informe seu ID (<code>{user_id}</code>) ao suporte.\n\n"
+)
+TERMS_TEXT = "🔒 <b>Segurança e Termos</b>\nAo prosseguir, você declara que leu e concorda com nossos termos de uso."
+
+
+def build_main_keyboard() -> InlineKeyboardMarkup:
+    """Constrói o teclado inline com botões lado a lado e destaque para compra."""
+    keyboard = [
+        [InlineKeyboardButton("🛒 COMPRAR SEGUIDORES E CURTIDAS", callback_data="back_to_categories")],
+        [
+            InlineKeyboardButton("👤 Meu Perfil", callback_data="my_profile"),
+            InlineKeyboardButton("💳 Adicionar Saldo", callback_data="add_balance"),
+        ],
+        [
+            InlineKeyboardButton("📜 Histórico", callback_data="my_history"),
+            InlineKeyboardButton("🤝 Afiliados", callback_data="affiliates"),
+        ],
+        [
+            InlineKeyboardButton("🎧 Suporte", url="https://t.me/LPsSuporte"),
+            InlineKeyboardButton("📊 Consultoria de Perfil", callback_data="profile_consulting"),
+        ],
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /start: exibe mensagem de boas-vindas e menu principal."""
     user_id = update.effective_user.id
-    first_name = update.effective_user.first_name
+    first_name = update.effective_user.first_name or "Usuário"
     username = update.effective_user.username
 
-    # Verifica se o usuário já existe no banco, senão cria
-    conn = get_connection()
-    cursor = conn.cursor()
+    safe_first_name = escape_html(first_name)
+    safe_user_id = escape_html(str(user_id))
+
     try:
-        cursor.execute("SELECT user_id FROM users WHERE user_id = %s", (user_id,))
-        if not cursor.fetchone():
-            cursor.execute(
-                "INSERT INTO users (user_id, first_name, username, main_balance_cents, affiliate_balance_cents, created_at) VALUES (%s, %s, %s, 0, 0, %s)",
-                (user_id, first_name, username, datetime.now())
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                # Upsert do usuário
+                cur.execute(
+                    """
+                    INSERT INTO users (
+                        user_id,
+                        first_name,
+                        username,
+                        balance,
+                        affiliate_balance,
+                        created_at
+                    )
+                    VALUES (%s, %s, %s, 0, 0, %s)
+                    ON CONFLICT (user_id) DO NOTHING;
+                    """,
+                    (user_id, first_name, username, datetime.now())
+                )
+                conn.commit()
+
+                # Saldo
+                cur.execute(
+                    "SELECT balance FROM users WHERE user_id = %s",
+                    (user_id,)
+                )
+                row = cur.fetchone()
+                saldo_centavos = int(row[0]) if row else 0
+                saldo_reais = saldo_centavos / 100.0
+
+                # Pedidos
+                cur.execute(
+                    "SELECT COUNT(*) FROM orders WHERE user_id = %s",
+                    (user_id,)
+                )
+                total_pedidos = cur.fetchone()[0]
+
+    except Exception:
+        logger.exception("Erro ao carregar dados do usuário %s", user_id)
+
+        if update.effective_message:
+            await update.effective_message.reply_text(
+                "⚠️ <b>Erro interno.</b> Tente novamente mais tarde.",
+                parse_mode="HTML"
             )
-            conn.commit()
-            logger.info(f"Novo usuário: {user_id} - {first_name}")
-    except Exception as e:
-        logger.error(f"Erro ao inserir usuário: {e}")
-        conn.rollback()
-    finally:
-        conn.close()
+        return
 
-    # Verifica se o usuário foi indicado por alguém (via parâmetro start=ref)
-    if context.args:
-        referrer_id = context.args[0]
-        if referrer_id.isdigit() and int(referrer_id) != user_id:
-            referrer_id = int(referrer_id)
-            conn = get_connection()
-            cursor = conn.cursor()
-            try:
-                cursor.execute("SELECT referred_by FROM users WHERE user_id = %s", (user_id,))
-                row = cursor.fetchone()
-                if not row or not row[0]:
-                    cursor.execute("UPDATE users SET referred_by = %s WHERE user_id = %s", (referrer_id, user_id))
-                    conn.commit()
-                    logger.info(f"Usuário {user_id} indicado por {referrer_id}")
-            except Exception as e:
-                logger.error(f"Erro ao salvar indicação: {e}")
-                conn.rollback()
-            finally:
-                conn.close()
-
-    # Menu principal
-    keyboard = [
-        [InlineKeyboardButton("🛒 Comprar Serviços", callback_data="back_to_categories")],
-        [InlineKeyboardButton("💰 Saldo", callback_data="show_balance")],
-        [InlineKeyboardButton("📜 Meus Pedidos", callback_data="my_history")],
-        [InlineKeyboardButton("🤝 Indicar Amigos", callback_data="affiliates")],
-        [InlineKeyboardButton("❓ Ajuda", callback_data="help_menu")]
-    ]
-    if user_id == ADMIN_ID:
-        keyboard.append([InlineKeyboardButton("👑 Painel Admin", callback_data="admin_panel")])
-
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    welcome_text = (
-        f"🎉 *Bem-vindo ao LikesPlus, {first_name}!* 🎉\n\n"
-        "🚀 A plataforma mais completa para turbinar suas redes sociais!\n\n"
-        "✅ Serviços para Instagram, TikTok, YouTube, Facebook, Kwai, Telegram e muito mais.\n"
-        "✅ Pagamento via PIX (cai na hora).\n"
-        "✅ Ganhe 10% de comissão indicando amigos!\n\n"
-        "Use os botões abaixo para navegar:"
+    msg = (
+        WELCOME_HEADER +
+        f"👋 Olá, <b>{safe_first_name}</b>! Seja bem-vindo ao <b>LIKESPLUS</b>.\n\n"
+        f"🆔 <b>ID do usuário:</b> <code>{safe_user_id}</code>\n"
+        f"💰 <b>Saldo disponível:</b> <code>R$ {saldo_reais:.2f}</code>\n"
+        f"📦 <b>Total de pedidos:</b> <code>{total_pedidos}</code>\n\n"
+        + INSTRUCTIONS +
+        SUPPORT_TEMPLATE.format(
+            user_id=f"<code>{safe_user_id}</code>"
+        ) +
+        TERMS_TEXT
     )
-    await update.message.reply_text(welcome_text, reply_markup=reply_markup, parse_mode="Markdown")
+
+    reply_markup = build_main_keyboard()
+
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            text=msg,
+            reply_markup=reply_markup,
+            parse_mode="HTML"
+        )
+
+    elif update.message:
+        await update.message.reply_text(
+            text=msg,
+            reply_markup=reply_markup,
+            parse_mode="HTML"
+        )
+
+    else:
+        logger.error(
+            "Tipo de update desconhecido no start_command para o usuário %s",
+            user_id
+        )
+
+
+
