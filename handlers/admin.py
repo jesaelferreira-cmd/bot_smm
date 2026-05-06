@@ -1213,3 +1213,24 @@ async def fix_provider_column(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(f"❌ Erro: {e}")
     finally:
         conn.close()
+
+async def clean_categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Remove caracteres especiais das categorias no banco."""
+    if update.effective_user.id != ADMIN_ID:
+        return
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        # Remove emojis e espaços extras no início/fim
+        cursor.execute("""
+            UPDATE services 
+            SET category = TRIM(REGEXP_REPLACE(category, '[^\w\s\[\]]+', '', 'g'))
+            WHERE category IS NOT NULL;
+        """)
+        conn.commit()
+        await update.message.reply_text("✅ Categorias limpas (emojis removidos).")
+    except Exception as e:
+        conn.rollback()
+        await update.message.reply_text(f"❌ Erro: {e}")
+    finally:
+        conn.close()
