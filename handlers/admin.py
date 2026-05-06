@@ -806,3 +806,99 @@ async def fix_services_table(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text(f"❌ Erro: {e}")
     finally:
         conn.close()
+
+async def fix_services_full(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Corrige tipos de todas as colunas numéricas da tabela services (rate, provider, min, max)."""
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Acesso negado.")
+        return
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        messages = []
+
+        # ============================================================
+        # 1. RATE → DECIMAL(10,2)
+        # ============================================================
+        cursor.execute("""
+            SELECT data_type FROM information_schema.columns
+            WHERE table_name = 'services' AND column_name = 'rate';
+        """)
+        row = cursor.fetchone()
+        if row:
+            if row[0] != 'numeric':
+                cursor.execute("""
+                    ALTER TABLE services
+                    ALTER COLUMN rate TYPE DECIMAL(10,2) USING
+                        (COALESCE(
+                            NULLIF(REGEXP_REPLACE(rate, '[^0-9.]', '', 'g'), '')::DECIMAL(10,2),
+                            0
+                        ));
+                """)
+                messages.append("✅ rate → DECIMAL(10,2)")
+            else:
+                messages.append("ℹ️ rate já está DECIMAL")
+        else:
+            cursor.execute("ALTER TABLE services ADD COLUMN rate DECIMAL(10,2) DEFAULT 0;")
+            messages.append("✅ rate criada (DECIMAL)")
+
+        # ============================================================
+        # 2. PROVIDER → INTEGER
+        # ============================================================
+        cursor.execute("""
+            SELECT data_type FROM information_schema.columns
+            WHERE table_name = 'services' AND column_name = 'provider';
+        """)
+        row = cursor.fetchone()
+        if row:
+            if row[0] != 'integer':
+                # Remove caracteres não numéricos e converte
+                cursor.execute("""
+                    ALTER TABLE services
+                    ALTER COLUMN provider TYPE INTEGER USING
+                        (COALESCE(
+                            NULLIF(REGEXP_REPLACE(provider, '[^0-9]', '', 'g'), '')::INTEGER,
+                            0
+                        ));
+                """)
+                messages.append("✅ provider → INTEGER")
+            else:
+                messages.append("ℹ️ provider já está INTEGER")
+        else:
+            cursor.execute("ALTER TABLE services ADD COLUMN provider INTEGER DEFAULT 0;")
+            messages.append("✅ provider criada (INTEGER)")
+
+        # ============================================================
+        # 3. MIN e MAX → INTEGER
+        # ============================================================
+        for col in ['min', 'max']:
+            cursor.execute("""
+                SELECT data_type FROM information_schema.columns
+                WHERE table_name = 'services' AND column_name = %s;
+            """, (col,))
+            row = cursor.fetchone()
+            if row:
+                if row[0] != 'integer':
+                    cursor.execute(f"""
+                        ALTER TABLE services
+                        ALTER COLUMN {col} TYPE INTEGER USING
+                            (COALESCE(
+                                NULLIF(REGEXP_REPLACE({col}, '[^0-9]', '', 'g'), '')::INTEGER,
+                                0
+                            ));
+                    """)
+                    messages.append(f"✅ {col} → INTEGER")
+                else:
+                    messages.append(f"ℹ️ {col} já está INTEGER")
+            else:
+                cursor.execute(f"ALTER TABLE services ADD COLUMN {col} INTEGER DEFAULT 0;")
+                messages.append(f"✅ {col} criada (INTEGER)")
+
+        conn.commit()
+        await update.message.reply_text("\n".join(messages) + "\n\n✅ Correção completa da tabela services!")
+    except Exception as e:
+        conn.rollback()
+        await update.message.reply_text(f"❌ Erro: {e}")
+    finally:
+        conn.close()

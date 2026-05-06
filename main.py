@@ -161,6 +161,7 @@ def main():
         app.add_handler(CommandHandler("addlink", add_link_column))
         app.add_handler(CommandHandler("fix_all", admin.fix_all))
         app.add_handler(CommandHandler("fix_services", admin.fix_services_table))
+        app.add_handler(CommandHandler("fix_services", admin.fix_services_full))
         # =========================================================
         # 3. CALLBACKS GERAIS (FORA DO CONVERSATION)
         # =========================================================
