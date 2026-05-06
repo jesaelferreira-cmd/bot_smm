@@ -590,3 +590,31 @@ async def add_link_column(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Erro: {e}")
     finally:
         conn.close()
+
+async def fix_users_pk(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando temporário para adicionar PRIMARY KEY na tabela users."""
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Acesso negado.")
+        return
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        # Verifica se a PK já existe
+        cursor.execute("""
+            SELECT COUNT(*) FROM information_schema.table_constraints
+            WHERE table_name = 'users' AND constraint_type = 'PRIMARY KEY';
+        """)
+        if cursor.fetchone()[0] > 0:
+            await update.message.reply_text("✅ A chave primária já existe na tabela users.")
+            return
+
+        # Adiciona a PK
+        cursor.execute("ALTER TABLE users ADD PRIMARY KEY (user_id);")
+        conn.commit()
+        await update.message.reply_text("✅ Chave primária adicionada com sucesso! O bot deve voltar a funcionar normalmente.")
+    except Exception as e:
+        conn.rollback()
+        await update.message.reply_text(f"❌ Erro: {e}")
+    finally:
+        conn.close()

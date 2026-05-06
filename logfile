@@ -136,3 +136,4 @@
 	        
 2026-05-06 00:05:11.742 -04 [15352] LOG:  checkpoint starting: time
 2026-05-06 00:05:12.081 -04 [15352] LOG:  checkpoint complete: wrote 2 buffers (0.0%), wrote 0 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.221 s, sync=0.001 s, total=0.340 s; sync files=1, longest=0.001 s, average=0.001 s; distance=14 kB, estimate=2348 kB; lsn=0/1D85D28, redo lsn=0/1D85CD0
+2026-05-06 00:44:14.533 -04 [20105] FATAL:  database "u0_a365" does not exist
