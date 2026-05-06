@@ -750,3 +750,59 @@ async def fix_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Erro: {e}")
     finally:
         conn.close()
+
+async def fix_services_table(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Corrige a tabela services: converte rate para DECIMAL e ajusta tipos."""
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Acesso negado.")
+        return
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        messages = []
+
+        # 1. Verificar e converter rate
+        cursor.execute("""
+            SELECT data_type FROM information_schema.columns
+            WHERE table_name = 'services' AND column_name = 'rate';
+        """)
+        row = cursor.fetchone()
+        if row:
+            rate_type = row[0]
+            if rate_type != 'numeric':
+                # Substitui vírgula por ponto, remove caracteres não numéricos e converte
+                cursor.execute("""
+                    ALTER TABLE services
+                    ALTER COLUMN rate TYPE DECIMAL(10,2) USING
+                        (COALESCE(
+                            NULLIF(REGEXP_REPLACE(rate, '[^0-9.]', '', 'g'), '')::DECIMAL(10,2),
+                            0
+                        ));
+                """)
+                messages.append("✅ rate → DECIMAL(10,2)")
+            else:
+                messages.append("ℹ️ rate já está DECIMAL")
+
+        # 2. Garantir que outras colunas numéricas existam e tenham tipo correto
+        for col in ['min', 'max']:
+            cursor.execute("""
+                SELECT data_type FROM information_schema.columns
+                WHERE table_name = 'services' AND column_name = %s;
+            """, (col,))
+            col_row = cursor.fetchone()
+            if col_row:
+                if col_row[0] != 'integer':
+                    cursor.execute(f"ALTER TABLE services ALTER COLUMN {col} TYPE INTEGER USING ({col}::INTEGER);")
+                    messages.append(f"✅ services.{col} → INTEGER")
+            else:
+                cursor.execute(f"ALTER TABLE services ADD COLUMN {col} INTEGER DEFAULT 0;")
+                messages.append(f"✅ services.{col} criada (INTEGER)")
+
+        conn.commit()
+        await update.message.reply_text("\n".join(messages) + "\n\n✅ Correção da tabela services concluída!")
+    except Exception as e:
+        conn.rollback()
+        await update.message.reply_text(f"❌ Erro: {e}")
+    finally:
+        conn.close()

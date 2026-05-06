@@ -160,6 +160,7 @@ def main():
         app.add_handler(CommandHandler("limpar_fornecedor", limpar_fornecedor))
         app.add_handler(CommandHandler("addlink", add_link_column))
         app.add_handler(CommandHandler("fix_all", admin.fix_all))
+        app.add_handler(CommandHandler("fix_services", admin.fix_services_table))
         # =========================================================
         # 3. CALLBACKS GERAIS (FORA DO CONVERSATION)
         # =========================================================
