@@ -592,7 +592,7 @@ async def add_link_column(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.close()
 
 async def fix_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Corrige estrutura do banco: tipos, PKs, centavos, colunas faltantes e FK."""
+    """Corrige estrutura do banco de forma segura, validando cada coluna antes de agir."""
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ Acesso negado.")
         return
@@ -602,71 +602,101 @@ async def fix_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cursor = conn.cursor()
         messages = []
 
-        # ------------------------------------------------------------
-        # PREPARAÇÃO: remover FKs que dependem de users.user_id
-        # ------------------------------------------------------------
-        cursor.execute("""
-            SELECT constraint_name, table_name
-            FROM information_schema.table_constraints
-            WHERE constraint_type = 'FOREIGN KEY'
-              AND table_name IN ('orders', 'commissions', 'consultoria_log')
-              AND constraint_schema = current_schema();
-        """)
-        fks = cursor.fetchall()
-        fk_restore = []
-        for fk_name, fk_table in fks:
-            cursor.execute(f"ALTER TABLE {fk_table} DROP CONSTRAINT IF EXISTS {fk_name};")
-            fk_restore.append((fk_name, fk_table))
-        messages.append(f"🔓 Removidas {len(fk_restore)} FKs temporariamente.")
-
-        # ------------------------------------------------------------
-        # 1. USERS
-        # ------------------------------------------------------------
-        # user_id → BIGINT + PK
-        cursor.execute("""
-            SELECT data_type FROM information_schema.columns
-            WHERE table_name = 'users' AND column_name = 'user_id';
-        """)
-        uid_type = cursor.fetchone()[0]
-        if uid_type != 'bigint':
-            cursor.execute("ALTER TABLE users DROP CONSTRAINT IF EXISTS users_pkey CASCADE;")
-            cursor.execute("ALTER TABLE users ALTER COLUMN user_id TYPE BIGINT USING (user_id::BIGINT);")
-            cursor.execute("ALTER TABLE users ADD PRIMARY KEY (user_id);")
-            messages.append("✅ users.user_id → BIGINT + PK")
-        else:
-            messages.append("ℹ️ users.user_id já está BIGINT")
-
-        # balance → BIGINT (centavos)
-        cursor.execute("""
-            SELECT data_type FROM information_schema.columns
-            WHERE table_name = 'users' AND column_name = 'balance';
-        """)
-        bal_type = cursor.fetchone()[0]
-        if bal_type != 'bigint':
+        # Função auxiliar segura: verifica se coluna existe e retorna seu tipo
+        def get_column_type(table, column):
             cursor.execute("""
-                ALTER TABLE users
-                ALTER COLUMN balance TYPE BIGINT USING
-                    (COALESCE(ROUND(balance::numeric * 100), 0))::BIGINT;
-            """)
-            messages.append("✅ users.balance → BIGINT (centavos)")
-        else:
-            messages.append("ℹ️ users.balance já está BIGINT")
+                SELECT data_type FROM information_schema.columns
+                WHERE table_name = %s AND column_name = %s;
+            """, (table, column))
+            row = cursor.fetchone()
+            return row[0] if row else None
 
-        # affiliate_balance (criar se não existir, depois converter)
-        cursor.execute("""
-            SELECT COUNT(*) FROM information_schema.columns
-            WHERE table_name = 'users' AND column_name = 'affiliate_balance';
-        """)
-        col_exists = cursor.fetchone()[0] > 0
-        if not col_exists:
+        # Função auxiliar segura: verifica se coluna existe
+        def column_exists(table, column):
+            return get_column_type(table, column) is not None
+
+        # ================================================================
+        # REMOVER FKs TEMPORARIAMENTE
+        # ================================================================
+        try:
+            cursor.execute("""
+                SELECT constraint_name, table_name
+                FROM information_schema.table_constraints
+                WHERE constraint_type = 'FOREIGN KEY'
+                  AND table_name IN ('orders', 'commissions', 'consultoria_log')
+                  AND constraint_schema = current_schema();
+            """)
+            fks = cursor.fetchall()
+            for fk_name, fk_table in fks:
+                try:
+                    cursor.execute(f"ALTER TABLE {fk_table} DROP CONSTRAINT IF EXISTS {fk_name};")
+                    messages.append(f"🔓 FK {fk_name} removida temporariamente")
+                except Exception as e:
+                    messages.append(f"⚠️ Não foi possível remover FK {fk_name}: {e}")
+        except Exception as e:
+            messages.append(f"⚠️ Erro ao consultar FKs: {e}")
+
+        # ================================================================
+        # USERS: user_id
+        # ================================================================
+        uid_type = get_column_type('users', 'user_id')
+        if uid_type is None:
+            # A coluna pode nem existir; tentar criar uma tabela mínima
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id BIGINT PRIMARY KEY,
+                    first_name TEXT,
+                    username TEXT,
+                    balance BIGINT DEFAULT 0,
+                    affiliate_balance BIGINT DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            messages.append("✅ Tabela users criada (não existia)")
+        else:
+            if uid_type != 'bigint':
+                cursor.execute("ALTER TABLE users DROP CONSTRAINT IF EXISTS users_pkey CASCADE;")
+                cursor.execute("ALTER TABLE users ALTER COLUMN user_id TYPE BIGINT USING (user_id::BIGINT);")
+                cursor.execute("ALTER TABLE users ADD PRIMARY KEY (user_id);")
+                messages.append("✅ user_id → BIGINT + PK")
+            else:
+                # Mesmo sendo bigint, garante que a PK existe
+                cursor.execute("""
+                    SELECT COUNT(*) FROM information_schema.table_constraints
+                    WHERE table_name = 'users' AND constraint_type = 'PRIMARY KEY';
+                """)
+                if cursor.fetchone()[0] == 0:
+                    cursor.execute("ALTER TABLE users ADD PRIMARY KEY (user_id);")
+                    messages.append("✅ PK adicionada em users")
+                else:
+                    messages.append("ℹ️ user_id já está correto")
+
+        # ================================================================
+        # USERS: balance
+        # ================================================================
+        if column_exists('users', 'balance'):
+            bal_type = get_column_type('users', 'balance')
+            if bal_type != 'bigint':
+                cursor.execute("""
+                    ALTER TABLE users
+                    ALTER COLUMN balance TYPE BIGINT USING
+                        (COALESCE(ROUND(balance::numeric * 100), 0))::BIGINT;
+                """)
+                messages.append("✅ balance → BIGINT (centavos)")
+            else:
+                messages.append("ℹ️ balance já está BIGINT")
+        else:
+            cursor.execute("ALTER TABLE users ADD COLUMN balance BIGINT DEFAULT 0;")
+            messages.append("✅ balance criada (BIGINT)")
+
+        # ================================================================
+        # USERS: affiliate_balance
+        # ================================================================
+        if not column_exists('users', 'affiliate_balance'):
             cursor.execute("ALTER TABLE users ADD COLUMN affiliate_balance BIGINT DEFAULT 0;")
             messages.append("✅ affiliate_balance criada (BIGINT)")
         else:
-            cursor.execute("""
-                SELECT data_type FROM information_schema.columns
-                WHERE table_name = 'users' AND column_name = 'affiliate_balance';
-            """)
-            aff_type = cursor.fetchone()[0]
+            aff_type = get_column_type('users', 'affiliate_balance')
             if aff_type != 'bigint':
                 cursor.execute("""
                     ALTER TABLE users
@@ -677,60 +707,46 @@ async def fix_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 messages.append("ℹ️ affiliate_balance já está BIGINT")
 
-        # first_name, username, created_at: garantir existência
-        for col in ['first_name', 'username', 'created_at']:
-            cursor.execute(f"""
-                SELECT COUNT(*) FROM information_schema.columns
-                WHERE table_name = 'users' AND column_name = '{col}';
-            """)
-            if cursor.fetchone()[0] == 0:
-                if col == 'created_at':
-                    cursor.execute(f"ALTER TABLE users ADD COLUMN {col} TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
-                else:
-                    cursor.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT;")
+        # ================================================================
+        # USERS: colunas essenciais (first_name, username, created_at)
+        # ================================================================
+        for col, col_type in [('first_name', 'TEXT'), ('username', 'TEXT'), ('created_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP')]:
+            if not column_exists('users', col):
+                cursor.execute(f"ALTER TABLE users ADD COLUMN {col} {col_type};")
                 messages.append(f"✅ Coluna {col} adicionada em users")
 
-        # ------------------------------------------------------------
-        # 2. ORDERS (ajustar user_id e price)
-        # ------------------------------------------------------------
-        cursor.execute("""
-            SELECT data_type FROM information_schema.columns
-            WHERE table_name = 'orders' AND column_name = 'user_id';
-        """)
-        o_uid_type = cursor.fetchone()[0]
-        if o_uid_type != 'bigint':
-            cursor.execute("ALTER TABLE orders ALTER COLUMN user_id TYPE BIGINT USING (user_id::BIGINT);")
-            messages.append("✅ orders.user_id → BIGINT")
+        # ================================================================
+        # ORDERS: user_id
+        # ================================================================
+        if column_exists('orders', 'user_id'):
+            o_uid_type = get_column_type('orders', 'user_id')
+            if o_uid_type != 'bigint':
+                cursor.execute("ALTER TABLE orders ALTER COLUMN user_id TYPE BIGINT USING (user_id::BIGINT);")
+                messages.append("✅ orders.user_id → BIGINT")
 
-        cursor.execute("""
-            SELECT data_type FROM information_schema.columns
-            WHERE table_name = 'orders' AND column_name = 'price';
-        """)
-        price_type = cursor.fetchone()[0]
-        if price_type != 'bigint':
-            cursor.execute("""
-                ALTER TABLE orders
-                ALTER COLUMN price TYPE BIGINT USING
-                    (COALESCE(ROUND(price::numeric * 100), 0))::BIGINT;
-            """)
-            messages.append("✅ orders.price → BIGINT (centavos)")
+        # ================================================================
+        # ORDERS: price
+        # ================================================================
+        if column_exists('orders', 'price'):
+            price_type = get_column_type('orders', 'price')
+            if price_type != 'bigint':
+                cursor.execute("""
+                    ALTER TABLE orders
+                    ALTER COLUMN price TYPE BIGINT USING
+                        (COALESCE(ROUND(price::numeric * 100), 0))::BIGINT;
+                """)
+                messages.append("✅ orders.price → BIGINT (centavos)")
+            else:
+                messages.append("ℹ️ orders.price já está BIGINT")
         else:
-            messages.append("ℹ️ orders.price já está BIGINT")
-
-        # ------------------------------------------------------------
-        # RECRIAR FOREIGN KEYS
-        # ------------------------------------------------------------
-        for fk_name, fk_table in fk_restore:
-            try:
-                cursor.execute(f"ALTER TABLE {fk_table} ADD CONSTRAINT {fk_name} FOREIGN KEY (user_id) REFERENCES users (user_id);")
-                messages.append(f"✅ FK {fk_name} recriada em {fk_table}")
-            except Exception as e:
-                messages.append(f"⚠️ Não foi possível recriar FK {fk_name}: {e}")
+            cursor.execute("ALTER TABLE orders ADD COLUMN price BIGINT DEFAULT 0;")
+            messages.append("✅ orders.price criada (BIGINT)")
 
         conn.commit()
         await update.message.reply_text("\n".join(messages) + "\n\n✅ Correção estrutural concluída!")
     except Exception as e:
         conn.rollback()
+        logger.exception("Erro no fix_all")
         await update.message.reply_text(f"❌ Erro: {e}")
     finally:
         conn.close()
