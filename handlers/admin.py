@@ -1224,7 +1224,7 @@ async def clean_categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Remove emojis e espaços extras no início/fim
         cursor.execute("""
             UPDATE services 
-            SET category = TRIM(REGEXP_REPLACE(category, '[^\w\s\[\]]+', '', 'g'))
+            SET category = TRIM(REGEXP_REPLACE(category, r'[^\w\s\[\]]+', '', 'g'))
             WHERE category IS NOT NULL;
         """)
         conn.commit()

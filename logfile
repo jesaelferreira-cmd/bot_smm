@@ -137,3 +137,22 @@
 2026-05-06 00:05:11.742 -04 [15352] LOG:  checkpoint starting: time
 2026-05-06 00:05:12.081 -04 [15352] LOG:  checkpoint complete: wrote 2 buffers (0.0%), wrote 0 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.221 s, sync=0.001 s, total=0.340 s; sync files=1, longest=0.001 s, average=0.001 s; distance=14 kB, estimate=2348 kB; lsn=0/1D85D28, redo lsn=0/1D85CD0
 2026-05-06 00:44:14.533 -04 [20105] FATAL:  database "u0_a365" does not exist
+2026-05-13 14:10:44.659 -04 [5295] LOG:  starting PostgreSQL 18.2 on aarch64-unknown-linux-android, compiled by Android (13989888, +pgo, +bolt, +lto, +mlgo, based on r563880c) clang version 21.0.0 (https://android.googlesource.com/toolchain/llvm-project 5e96669f06077099aa41290cdb4c5e6fa0f59349), 64-bit
+2026-05-13 14:10:44.660 -04 [5295] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-13 14:10:44.662 -04 [5295] LOG:  listening on Unix socket "/data/data/com.termux/files/usr/tmp/.s.PGSQL.5432"
+2026-05-13 14:10:44.707 -04 [5312] LOG:  database system was interrupted; last known up at 2026-05-06 00:05:12 -04
+2026-05-13 14:10:44.898 -04 [5312] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-05-13 14:10:44.900 -04 [5312] LOG:  redo starts at 0/1D85CD0
+2026-05-13 14:10:44.901 -04 [5312] LOG:  invalid record length at 0/1D85DD8: expected at least 24, got 0
+2026-05-13 14:10:44.901 -04 [5312] LOG:  redo done at 0/1D85DA0 system usage: CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+2026-05-13 14:10:44.905 -04 [5304] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-05-13 14:10:44.910 -04 [5304] LOG:  checkpoint complete: wrote 0 buffers (0.0%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.001 s, total=0.006 s; sync files=2, longest=0.001 s, average=0.001 s; distance=0 kB, estimate=0 kB; lsn=0/1D85DD8, redo lsn=0/1D85DD8
+2026-05-13 14:10:44.923 -04 [5295] LOG:  database system is ready to accept connections
+2026-05-13 14:15:45.012 -04 [5304] LOG:  checkpoint starting: time
+2026-05-13 14:15:45.250 -04 [5304] LOG:  checkpoint complete: wrote 2 buffers (0.0%), wrote 0 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.208 s, sync=0.002 s, total=0.238 s; sync files=2, longest=0.001 s, average=0.001 s; distance=16 kB, estimate=16 kB; lsn=0/1D89F88, redo lsn=0/1D89F30
+2026-05-13 14:16:56.679 -04 [6486] ERROR:  column "price" does not exist at character 44
+2026-05-13 14:16:56.679 -04 [6486] STATEMENT:  
+	            SELECT COUNT(*), COALESCE(SUM(price), 0)
+	            FROM orders
+	            WHERE status NOT IN ('Cancelado', 'Estornado', 'Canceled', 'Cancelled')
+	        
